@@ -20,4 +20,26 @@
 
 #include <stdlib.h>
 
-int main (void) { return EXIT_SUCCESS; }
+#include <stuffy/app.h>
+#include <stuffy/window.h>
+
+static const WindowConf window_config = {
+  .rect       = {.x = 128, .y = 128, .width = 640, .height = 360},
+  .title      = "Moss Example Application",
+  .style_mask = WINDOW_STYLE_TITLED_BIT | WINDOW_STYLE_CLOSABLE_BIT |
+                WINDOW_STYLE_RESIZABLE_BIT | WINDOW_STYLE_ICONIFIABLE_BIT,
+};
+
+int main (void)
+{
+  init_app ( );
+
+
+  Window *const window = open_window (&window_config);
+
+  while (!should_window_close (window)) { update_app ( ); }
+
+  deinit_app ( );
+
+  return EXIT_SUCCESS;
+}

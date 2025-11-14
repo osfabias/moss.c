@@ -1,3 +1,6 @@
 [submodule "tests/vendor/check"]
 	path = tests/vendor/check
 	url = git@github.com:libcheck/check.git
+[submodule "example/vendor/stuffy.c"]
+	path = example/vendor/stuffy.c
+	url = git@github.com:osfabias/stuffy.c.git
