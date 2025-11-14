@@ -1,0 +1,3 @@
+[submodule "tests/vendor/check"]
+	path = tests/vendor/check
+	url = git@github.com:libcheck/check.git

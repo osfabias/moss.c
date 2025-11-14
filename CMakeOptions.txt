@@ -1,0 +1,3 @@
+option(MOSS_BUILD_SHARED "Build library as a shared library." OFF)
+option(MOSS_BUILD_EXAMPLE "Build example program." ${MOSS_IS_STANDALONE_BUILD})
+option(MOSS_BUILD_TESTS "Build test programs." ${MOSS_IS_STANDALONE_BUILD})

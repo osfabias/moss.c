@@ -1,0 +1,36 @@
+CompileFlags:
+  CompilationDatabase: build
+  Remove:
+    - -march=*
+    - -mtune=*
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - readability-*
+      - performance-*
+      - modernize-*
+      - bugprone-*
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+
+Completion:
+  AllScopes: Yes
+  IncludeIneligibleResults: No
+
+Hover:
+  ShowAKA: Yes
+
+References:
+  ShowAKA: Yes
+
+DocumentationFormat: Doxygen
