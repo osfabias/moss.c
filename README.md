@@ -1,13 +1,12 @@
 # moss
 
-moss is a C library template that provides a solid foundation for building C libraries with modern tooling and best practices.
+2D graphics library.
 
 ## Table of Contents
 
 - [Building the Project](#building-the-project)
 - [Build Options](#build-options)
 - [Using as a CMake Subdirectory](#using-as-a-cmake-subdirectory)
-- [Creating a New Project from This Template](#creating-a-new-project-from-this-template)
 
 ## Building the Project
 
@@ -86,22 +85,3 @@ set(MOSS_BUILD_SHARED ON)
 add_subdirectory(moss)
 target_link_libraries(your_target PRIVATE moss)
 ```
-
-## Creating a New Project from This Template
-
-This repository serves as a template for creating new C library projects. Use the included setup script to create your own project:
-
-### Using the Setup Script
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/burs1/templ.c/refs/heads/main/setup.sh" | bash -s mynewlib
-```
-
-### What the Script Does
-
-1. **Clones the template**: Creates a copy of this repository
-2. **Replaces project name**: Changes all "moss" references to your project name
-3. **Replaces full project name**: Changes "moss" references to your full project name
-4. **Handles case variations**: Updates `moss`, `MOSS`, and `Umoss` appropriately
-5. **Initializes git**: Creates a fresh git repository for your project
-6. **Provides next steps**: Shows instructions for customizing your new project

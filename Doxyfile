@@ -4,7 +4,7 @@
 
 PROJECT_NAME           = "moss"
 PROJECT_NUMBER         = 0.1.0
-PROJECT_BRIEF          = "A generic C library template with comprehensive documentation examples"
+PROJECT_BRIEF          = "2D graphics library."
 PROJECT_LOGO           = docs/logo.svg
 
 OUTPUT_DIRECTORY       = docs
