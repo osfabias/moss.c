@@ -4,3 +4,6 @@
 [submodule "vendor/stuffy.c"]
 	path = vendor/stuffy.c
 	url = git@github.com:osfabias/stuffy.c.git
+[submodule "vendor/cglm"]
+	path = vendor/cglm
+	url = git@github.com:recp/cglm.git
