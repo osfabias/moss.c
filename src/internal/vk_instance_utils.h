@@ -14,13 +14,12 @@
   limitations under the License.
 
   @file src/internal/vk_instance_utils.c
-  @brief Required Vulkan instance creation utility functions
+  @brief Vulkan instance utility functions.
   @author Ilya Buravov (ilburale@gmail.com)
 */
 
 #pragma once
 
-#include "vulkan/vulkan_core.h"
 #include <stdint.h>
 
 #include <vulkan/vulkan.h>

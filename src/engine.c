@@ -41,6 +41,7 @@
 #include "src/internal/memory_utils.h"
 #include "src/internal/shaders.h"
 #include "src/internal/vertex.h"
+#include "src/internal/vk_command_pool_utils.h"
 #include "src/internal/vk_instance_utils.h"
 #include "src/internal/vk_physical_device_utils.h"
 #include "src/internal/vk_shader_utils.h"
@@ -94,6 +95,8 @@ typedef struct
   VkQueue graphics_queue;
   /* Present queue. */
   VkQueue present_queue;
+  /* Transfer queue. */
+  VkQueue transfer_queue;
 
   /* === Swap chain === */
   /* Swap chain. */
@@ -130,10 +133,12 @@ typedef struct
   size_t vertex_buffer_size;
 
   /* === Command buffers === */
-  /* Command pool. */
-  VkCommandPool command_pool;
+  /* General command pool. */
+  VkCommandPool general_command_pool;
   /* Command buffers. */
-  VkCommandBuffer command_buffers[ MAX_FRAMES_IN_FLIGHT ];
+  VkCommandBuffer general_command_buffers[ MAX_FRAMES_IN_FLIGHT ];
+  /* Transfer command pool. */
+  VkCommandPool transfer_command_pool;
 
   /* === Synchronization objects === */
   /* Image available semaphores. */
@@ -162,12 +167,17 @@ static Moss__Engine g_engine = {
   /* Physical and logical device. */
   .physical_device                            = VK_NULL_HANDLE,
   .device                                     = VK_NULL_HANDLE,
-  .queue_family_indices.graphics_family       = 0,
-  .queue_family_indices.present_family        = 0,
-  .queue_family_indices.graphics_family_found = false,
-  .queue_family_indices.present_family_found  = false,
   .graphics_queue                             = VK_NULL_HANDLE,
   .present_queue                              = VK_NULL_HANDLE,
+  .transfer_queue = VK_NULL_HANDLE,
+  .queue_family_indices = {
+    .graphics_family       = 0,
+    .present_family        = 0,
+    .transfer_family       = 0,
+    .graphics_family_found = false,
+    .present_family_found  = false,
+    .transfer_family_found = false,
+  },
 
   /* Swap chain. */
   .swapchain                   = VK_NULL_HANDLE,
@@ -190,8 +200,8 @@ static Moss__Engine g_engine = {
   .vertex_buffer_size   = 0,
 
   /* Command buffers. */
-  .command_pool    = VK_NULL_HANDLE,
-  .command_buffers = { VK_NULL_HANDLE, VK_NULL_HANDLE },
+  .general_command_pool    = VK_NULL_HANDLE,
+  .general_command_buffers = { VK_NULL_HANDLE, VK_NULL_HANDLE },
 
   /* Synchronization objects. */
   .image_available_semaphores = { VK_NULL_HANDLE, VK_NULL_HANDLE },
@@ -302,12 +312,6 @@ inline static MossResult moss__create_graphics_pipeline (void);
 inline static MossResult moss__create_framebuffers (void);
 
 /*
-  @brief Creates command pool.
-  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
-*/
-inline static MossResult moss__create_command_pool (void);
-
-/*
   @brief Creates vertex buffer.
   @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
 */
@@ -328,7 +332,7 @@ inline static void moss__fill_vertex_buffer (void);
   @brief Creates command buffers.
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
-inline static MossResult moss__create_command_buffers (void);
+inline static MossResult moss__create_general_command_buffers (void);
 
 /*
   @brief Creates image available semaphores.
@@ -483,11 +487,19 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     0,
     &g_engine.graphics_queue
   );
+
   vkGetDeviceQueue (
     g_engine.device,
     g_engine.queue_family_indices.present_family,
     0,
     &g_engine.present_queue
+  );
+
+  vkGetDeviceQueue (
+    g_engine.device,
+    g_engine.queue_family_indices.transfer_family,
+    0,
+    &g_engine.transfer_queue
   );
 
   const StuffyExtent2D framebuffer_size =
@@ -523,7 +535,23 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     return MOSS_RESULT_ERROR;
   }
 
-  if (moss__create_command_pool ( ) != MOSS_RESULT_SUCCESS)
+  // Create general command pool
+  if (moss__create_command_pool (
+        g_engine.device,
+        g_engine.queue_family_indices.graphics_family,
+        &g_engine.general_command_pool
+      ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  // Create transfer command pool
+  if (moss__create_command_pool (
+        g_engine.device,
+        g_engine.queue_family_indices.transfer_family,
+        &g_engine.transfer_command_pool
+      ) != MOSS_RESULT_SUCCESS)
   {
     moss_engine_deinit ( );
     return MOSS_RESULT_ERROR;
@@ -550,7 +578,7 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
 
   moss__fill_vertex_buffer ( );
 
-  if (moss__create_command_buffers ( ) != MOSS_RESULT_SUCCESS)
+  if (moss__create_general_command_buffers ( ) != MOSS_RESULT_SUCCESS)
   {
     moss_engine_deinit ( );
     return MOSS_RESULT_ERROR;
@@ -580,10 +608,16 @@ void moss_engine_deinit (void)
 
   if (g_engine.device != VK_NULL_HANDLE)
   {
-    if (g_engine.command_pool != VK_NULL_HANDLE)
+    if (g_engine.transfer_command_pool != VK_NULL_HANDLE)
     {
-      vkDestroyCommandPool (g_engine.device, g_engine.command_pool, NULL);
-      g_engine.command_pool = VK_NULL_HANDLE;
+      vkDestroyCommandPool (g_engine.device, g_engine.transfer_command_pool, NULL);
+      g_engine.transfer_command_pool = VK_NULL_HANDLE;
+    }
+
+    if (g_engine.general_command_pool != VK_NULL_HANDLE)
+    {
+      vkDestroyCommandPool (g_engine.device, g_engine.general_command_pool, NULL);
+      g_engine.general_command_pool = VK_NULL_HANDLE;
     }
 
     if (g_engine.vertex_buffer_memory != VK_NULL_HANDLE)
@@ -621,11 +655,14 @@ void moss_engine_deinit (void)
     g_engine.device                                     = VK_NULL_HANDLE;
     g_engine.physical_device                            = VK_NULL_HANDLE;
     g_engine.graphics_queue                             = VK_NULL_HANDLE;
+    g_engine.transfer_queue                             = VK_NULL_HANDLE;
     g_engine.present_queue                              = VK_NULL_HANDLE;
     g_engine.queue_family_indices.graphics_family       = 0;
     g_engine.queue_family_indices.present_family        = 0;
+    g_engine.queue_family_indices.transfer_family       = 0;
     g_engine.queue_family_indices.graphics_family_found = false;
     g_engine.queue_family_indices.present_family_found  = false;
+    g_engine.queue_family_indices.transfer_family_found = false;
   }
 
   if (g_engine.surface != VK_NULL_HANDLE)
@@ -674,7 +711,7 @@ MossResult moss_engine_draw_frame (void)
   const VkSemaphore render_finished_semaphore =
     g_engine.render_finished_semaphores[ g_engine.current_frame ];
   const VkCommandBuffer command_buffer =
-    g_engine.command_buffers[ g_engine.current_frame ];
+    g_engine.general_command_buffers[ g_engine.current_frame ];
 
   vkWaitForFences (g_engine.device, 1, &in_flight_fence, VK_TRUE, UINT64_MAX);
   vkResetFences (g_engine.device, 1, &in_flight_fence);
@@ -914,27 +951,44 @@ inline static MossResult moss__create_logical_device (void)
     moss__get_required_vk_device_extensions ( );
 
   uint32_t                queue_create_info_count = 0;
-  VkDeviceQueueCreateInfo queue_create_infos[ 2 ];
+  VkDeviceQueueCreateInfo queue_create_infos[ 3 ];
   const float             queue_priority = 1.0F;
 
-  const VkDeviceQueueCreateInfo graphics_queue_create_info = {
-    .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-    .queueFamilyIndex = g_engine.queue_family_indices.graphics_family,
-    .queueCount       = 1,
-    .pQueuePriorities = &queue_priority,
-  };
-  queue_create_infos[ queue_create_info_count++ ] = graphics_queue_create_info;
+  // Add graphics queue create info
+  {
+    const VkDeviceQueueCreateInfo create_info = {
+      .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = g_engine.queue_family_indices.graphics_family,
+      .queueCount       = 1,
+      .pQueuePriorities = &queue_priority,
+    };
+    queue_create_infos[ queue_create_info_count++ ] = create_info;
+  }
 
+  // Add present queue create info
   if (g_engine.queue_family_indices.graphics_family !=
       g_engine.queue_family_indices.present_family)
   {
-    VkDeviceQueueCreateInfo present_queue_create_info = {
+    const VkDeviceQueueCreateInfo create_info = {
       .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
       .queueFamilyIndex = g_engine.queue_family_indices.present_family,
       .queueCount       = 1,
       .pQueuePriorities = &queue_priority,
     };
-    queue_create_infos[ queue_create_info_count++ ] = present_queue_create_info;
+    queue_create_infos[ queue_create_info_count++ ] = create_info;
+  }
+
+  // Add transfer queue create info
+  if (g_engine.queue_family_indices.graphics_family !=
+      g_engine.queue_family_indices.transfer_family)
+  {
+    const VkDeviceQueueCreateInfo create_info = {
+      .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = g_engine.queue_family_indices.transfer_family,
+      .queueCount       = 1,
+      .pQueuePriorities = &queue_priority,
+    };
+    queue_create_infos[ queue_create_info_count++ ] = create_info;
   }
 
   VkPhysicalDeviceFeatures device_features = { 0 };
@@ -1365,33 +1419,34 @@ inline static MossResult moss__create_framebuffers (void)
   return MOSS_RESULT_SUCCESS;
 }
 
-inline static MossResult moss__create_command_pool (void)
-{
-  const VkCommandPoolCreateInfo pool_info = {
-    .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-    .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-    .queueFamilyIndex = g_engine.queue_family_indices.graphics_family,
-  };
-
-  const VkResult result =
-    vkCreateCommandPool (g_engine.device, &pool_info, NULL, &g_engine.command_pool);
-  if (result != VK_SUCCESS)
-  {
-    moss__error ("Failed to create command pool. Error code: %d.\n", result);
-    return MOSS_RESULT_ERROR;
-  }
-
-  return MOSS_RESULT_SUCCESS;
-}
-
 inline static MossResult moss__create_vertex_buffer (void)
 {
-  const VkBufferCreateInfo create_info = {
-    .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-    .size        = sizeof (g_verticies),
-    .usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  const bool graphics_and_transfer_family_are_same =
+    g_engine.queue_family_indices.graphics_family ==
+    g_engine.queue_family_indices.transfer_family;
+
+  const uint32_t shared_queue_family_indices[] = {
+    g_engine.queue_family_indices.graphics_family,
+    g_engine.queue_family_indices.transfer_family,
   };
+
+  VkBufferCreateInfo create_info = {
+    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .size  = sizeof (g_verticies),
+    .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  };
+
+  if (graphics_and_transfer_family_are_same)
+  {
+    create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+    create_info.queueFamilyIndexCount = 0;
+  }
+  else {
+    create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    create_info.queueFamilyIndexCount =
+      sizeof (shared_queue_family_indices) / sizeof (shared_queue_family_indices[ 0 ]);
+    create_info.pQueueFamilyIndices = shared_queue_family_indices;
+  }
 
   const VkResult result =
     vkCreateBuffer (g_engine.device, &create_info, NULL, &g_engine.vertex_buffer);
@@ -1469,17 +1524,20 @@ inline static void moss__fill_vertex_buffer (void)
   vkUnmapMemory (g_engine.device, g_engine.vertex_buffer_memory);
 }
 
-inline static MossResult moss__create_command_buffers (void)
+inline static MossResult moss__create_general_command_buffers (void)
 {
   const VkCommandBufferAllocateInfo alloc_info = {
     .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-    .commandPool        = g_engine.command_pool,
+    .commandPool        = g_engine.general_command_pool,
     .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
     .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
   };
 
-  const VkResult result =
-    vkAllocateCommandBuffers (g_engine.device, &alloc_info, g_engine.command_buffers);
+  const VkResult result = vkAllocateCommandBuffers (
+    g_engine.device,
+    &alloc_info,
+    g_engine.general_command_buffers
+  );
   if (result != VK_SUCCESS)
   {
     moss__error ("Failed to allocate command buffers. Error code: %d.\n", result);
