@@ -40,7 +40,7 @@
 #include "src/internal/vk_instance_utils.h"
 #include "src/internal/vk_physical_device_utils.h"
 #include "src/internal/vk_shader_utils.h"
-#include "src/internal/vk_swap_chain_utils.h"
+#include "src/internal/vk_swapchain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
 #include "vulkan/vulkan_core.h"
 
@@ -70,13 +70,14 @@ typedef struct
   VkQueue                  present_queue;        /* Present queue. */
 
   /* Swap chain. */
-  VkSwapchainKHR swap_chain;              /* Swap chain. */
-  VkImage       *swap_chain_images;       /* Swap chain images. */
-  uint32_t       swap_chain_image_count;  /* Number of swap chain images. */
-  VkFormat       swap_chain_image_format; /* Swap chain image format. */
-  VkExtent2D     swap_chain_extent;       /* Swap chain extent. */
-  VkImageView   *swap_chain_image_views;  /* Swap chain image views. */
-  VkFramebuffer *swap_chain_framebuffers; /* Swap chain framebuffers. */
+  VkSwapchainKHR swapchain;              /* Swap chain. */
+  VkImage       *swapchain_images;       /* Swap chain images. */
+  uint32_t       swapchain_image_count;  /* Number of swap chain images. */
+  VkFormat       swapchain_image_format; /* Swap chain image format. */
+  VkExtent2D     swapchain_extent;       /* Swap chain extent. */
+  VkImageView   *swapchain_image_views;  /* Swap chain image views. */
+  VkFramebuffer *swapchain_framebuffers; /* Swap chain framebuffers. */
+  bool           framebuffer_resized;
 
   /* Render pipeline. */
   VkRenderPass     render_pass;       /* Render pass. */
@@ -120,13 +121,13 @@ static Moss__Engine g_engine = {
   .present_queue                                  = VK_NULL_HANDLE,
 
   /* Swap chain. */
-  .swap_chain              = VK_NULL_HANDLE,
-  .swap_chain_images       = NULL,
-  .swap_chain_image_count  = 0,
-  .swap_chain_image_format = 0,
-  .swap_chain_extent       = (VkExtent2D) {.width = 0,     .height = 0   },
-  .swap_chain_image_views  = NULL,
-  .swap_chain_framebuffers = NULL,
+  .swapchain              = VK_NULL_HANDLE,
+  .swapchain_images       = NULL,
+  .swapchain_image_count  = 0,
+  .swapchain_image_format = 0,
+  .swapchain_extent       = (VkExtent2D) {.width = 0,     .height = 0   },
+  .swapchain_image_views  = NULL,
+  .swapchain_framebuffers = NULL,
 
   /* Render pipeline. */
   .render_pass       = VK_NULL_HANDLE,
@@ -195,7 +196,7 @@ static MossResult moss__create_logical_device (void);
   @param height Window height.
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
-static MossResult moss__create_swap_chain (uint32_t width, uint32_t height);
+static MossResult moss__create_swapchain (uint32_t width, uint32_t height);
 
 /*
   @brief Creates image views for swap chain images.
@@ -300,7 +301,7 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
 /*
   @brief Cleans up swap chain resources.
 */
-static void moss__cleanup_swap_chain (void);
+static void moss__cleanup_swapchain (void);
 
 /*
   @brief Recreates swap chain.
@@ -308,7 +309,7 @@ static void moss__cleanup_swap_chain (void);
   @param height Window height.
   @return Returns MOSS_RESULT_SUCCESS on success, error code otherwise.
 */
-static MossResult moss__recreate_swap_chain (uint32_t width, uint32_t height);
+static MossResult moss__recreate_swapchain (uint32_t width, uint32_t height);
 
 /*=============================================================================
     PUBLIC API FUNCTIONS IMPLEMENTATION
@@ -374,7 +375,7 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     &g_engine.present_queue
   );
 
-  if (moss__create_swap_chain (
+  if (moss__create_swapchain (
         config->window_config->width,
         config->window_config->height
       ) != MOSS_RESULT_SUCCESS)
@@ -438,7 +439,7 @@ void moss_engine_deinit (void)
 {
   if (g_engine.device != VK_NULL_HANDLE) { vkDeviceWaitIdle (g_engine.device); }
 
-  moss__cleanup_swap_chain ( );
+  moss__cleanup_swapchain ( );
   moss__cleanup_synchronization_objects ( );
 
   if (g_engine.device != VK_NULL_HANDLE)
@@ -532,7 +533,7 @@ MossResult moss_engine_draw_frame (void)
   uint32_t current_image_index;
   VkResult result = vkAcquireNextImageKHR (
     g_engine.device,
-    g_engine.swap_chain,
+    g_engine.swapchain,
     UINT64_MAX,
     image_available_semaphore,
     VK_NULL_HANDLE,
@@ -543,7 +544,7 @@ MossResult moss_engine_draw_frame (void)
   {
     // Swap chain is out of date, need to recreate before we can acquire image
     const StuffyWindowRect window_rect = stuffy_window_get_rect (g_engine.window);
-    return moss__recreate_swap_chain (window_rect.width, window_rect.height);
+    return moss__recreate_swapchain (window_rect.width, window_rect.height);
   }
 
   if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
@@ -587,7 +588,7 @@ MossResult moss_engine_draw_frame (void)
     .waitSemaphoreCount = signal_semaphore_count,
     .pWaitSemaphores    = signal_semaphores,
     .swapchainCount     = 1,
-    .pSwapchains        = &g_engine.swap_chain,
+    .pSwapchains        = &g_engine.swapchain,
     .pImageIndices      = &g_engine.current_frame,
   };
 
@@ -597,7 +598,7 @@ MossResult moss_engine_draw_frame (void)
   {
     // Swap chain is out of date or suboptimal, need to recreate
     const StuffyWindowRect window_rect = stuffy_window_get_rect (g_engine.window);
-    if (moss__recreate_swap_chain (window_rect.width, window_rect.height) !=
+    if (moss__recreate_swapchain (window_rect.width, window_rect.height) !=
         MOSS_RESULT_SUCCESS)
     {
       return MOSS_RESULT_ERROR;
@@ -780,32 +781,32 @@ static MossResult moss__create_logical_device (void)
   return MOSS_RESULT_SUCCESS;
 }
 
-static MossResult moss__create_swap_chain (uint32_t width, uint32_t height)
+static MossResult moss__create_swapchain (uint32_t width, uint32_t height)
 {
-  Moss__SwapChainSupportDetails swap_chain_support =
-    moss__query_swap_chain_support (g_engine.physical_device, g_engine.surface);
+  Moss__SwapChainSupportDetails swapchain_support =
+    moss__query_swapchain_support (g_engine.physical_device, g_engine.surface);
 
   const VkSurfaceFormatKHR surface_format = moss__choose_swap_surface_format (
-    swap_chain_support.formats,
-    swap_chain_support.format_count
+    swapchain_support.formats,
+    swapchain_support.format_count
   );
   const VkPresentModeKHR present_mode = moss__choose_swap_present_mode (
-    swap_chain_support.present_modes,
-    swap_chain_support.present_mode_count
+    swapchain_support.present_modes,
+    swapchain_support.present_mode_count
   );
   const VkExtent2D extent =
-    moss__choose_swap_extent (&swap_chain_support.capabilities, width, height);
+    moss__choose_swap_extent (&swapchain_support.capabilities, width, height);
 
   VkSwapchainCreateInfoKHR create_info = {
     .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
     .surface          = g_engine.surface,
-    .minImageCount    = swap_chain_support.capabilities.minImageCount,
+    .minImageCount    = swapchain_support.capabilities.minImageCount,
     .imageFormat      = surface_format.format,
     .imageColorSpace  = surface_format.colorSpace,
     .imageExtent      = extent,
     .imageArrayLayers = 1,
     .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-    .preTransform     = swap_chain_support.capabilities.currentTransform,
+    .preTransform     = swapchain_support.capabilities.currentTransform,
     .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
     .presentMode      = present_mode,
     .clipped          = VK_TRUE,
@@ -831,49 +832,49 @@ static MossResult moss__create_swap_chain (uint32_t width, uint32_t height)
   }
 
   const VkResult result =
-    vkCreateSwapchainKHR (g_engine.device, &create_info, NULL, &g_engine.swap_chain);
+    vkCreateSwapchainKHR (g_engine.device, &create_info, NULL, &g_engine.swapchain);
   if (result != VK_SUCCESS)
   {
     moss__error ("Failed to create swap chain. Error code: %d.\n", result);
-    moss__free_swap_chain_support_details (&swap_chain_support);
+    moss__free_swapchain_support_details (&swapchain_support);
     return MOSS_RESULT_ERROR;
   }
 
   vkGetSwapchainImagesKHR (
     g_engine.device,
-    g_engine.swap_chain,
-    &g_engine.swap_chain_image_count,
+    g_engine.swapchain,
+    &g_engine.swapchain_image_count,
     NULL
   );
-  g_engine.swap_chain_images =
-    (VkImage *)malloc (g_engine.swap_chain_image_count * sizeof (VkImage));
+  g_engine.swapchain_images =
+    (VkImage *)malloc (g_engine.swapchain_image_count * sizeof (VkImage));
   vkGetSwapchainImagesKHR (
     g_engine.device,
-    g_engine.swap_chain,
-    &g_engine.swap_chain_image_count,
-    g_engine.swap_chain_images
+    g_engine.swapchain,
+    &g_engine.swapchain_image_count,
+    g_engine.swapchain_images
   );
 
-  g_engine.swap_chain_image_format = surface_format.format;
-  g_engine.swap_chain_extent       = extent;
+  g_engine.swapchain_image_format = surface_format.format;
+  g_engine.swapchain_extent       = extent;
 
-  moss__free_swap_chain_support_details (&swap_chain_support);
+  moss__free_swapchain_support_details (&swapchain_support);
 
   return MOSS_RESULT_SUCCESS;
 }
 
 static MossResult moss__create_image_views (void)
 {
-  g_engine.swap_chain_image_views =
-    (VkImageView *)malloc (g_engine.swap_chain_image_count * sizeof (VkImageView));
+  g_engine.swapchain_image_views =
+    (VkImageView *)malloc (g_engine.swapchain_image_count * sizeof (VkImageView));
 
-  for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+  for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
     const VkImageViewCreateInfo create_info = {
       .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-      .image    = g_engine.swap_chain_images[ i ],
+      .image    = g_engine.swapchain_images[ i ],
       .viewType = VK_IMAGE_VIEW_TYPE_2D,
-      .format   = g_engine.swap_chain_image_format,
+      .format   = g_engine.swapchain_image_format,
       .components =
         {
                      .r = VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -894,16 +895,16 @@ static MossResult moss__create_image_views (void)
           g_engine.device,
           &create_info,
           NULL,
-          &g_engine.swap_chain_image_views[ i ]
+          &g_engine.swapchain_image_views[ i ]
         ) != VK_SUCCESS)
     {
       moss__error ("Failed to create image view %u.\n", i);
       for (uint32_t j = 0; j < i; ++j)
       {
-        vkDestroyImageView (g_engine.device, g_engine.swap_chain_image_views[ j ], NULL);
+        vkDestroyImageView (g_engine.device, g_engine.swapchain_image_views[ j ], NULL);
       }
-      free (g_engine.swap_chain_image_views);
-      g_engine.swap_chain_image_views = NULL;
+      free (g_engine.swapchain_image_views);
+      g_engine.swapchain_image_views = NULL;
       return MOSS_RESULT_ERROR;
     }
   }
@@ -914,7 +915,7 @@ static MossResult moss__create_image_views (void)
 static MossResult moss__create_render_pass (void)
 {
   const VkAttachmentDescription color_attachment = {
-    .format         = g_engine.swap_chain_image_format,
+    .format         = g_engine.swapchain_image_format,
     .samples        = VK_SAMPLE_COUNT_1_BIT,
     .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
     .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
@@ -1025,15 +1026,15 @@ static MossResult moss__create_graphics_pipeline (void)
   const VkViewport viewport = {
     .x        = 0.0F,
     .y        = 0.0F,
-    .width    = (float)g_engine.swap_chain_extent.width,
-    .height   = (float)g_engine.swap_chain_extent.height,
+    .width    = (float)g_engine.swapchain_extent.width,
+    .height   = (float)g_engine.swapchain_extent.height,
     .minDepth = 0.0F,
     .maxDepth = 1.0F,
   };
 
   const VkRect2D scissor = {
     .offset = {0, 0},
-    .extent = g_engine.swap_chain_extent,
+    .extent = g_engine.swapchain_extent,
   };
 
   const VkPipelineViewportStateCreateInfo viewport_state = {
@@ -1136,20 +1137,20 @@ static MossResult moss__create_graphics_pipeline (void)
 
 static MossResult moss__create_framebuffers (void)
 {
-  g_engine.swap_chain_framebuffers =
-    (VkFramebuffer *)malloc (g_engine.swap_chain_image_count * sizeof (VkFramebuffer));
+  g_engine.swapchain_framebuffers =
+    (VkFramebuffer *)malloc (g_engine.swapchain_image_count * sizeof (VkFramebuffer));
 
-  for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+  for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
-    const VkImageView attachments[] = {g_engine.swap_chain_image_views[ i ]};
+    const VkImageView attachments[] = {g_engine.swapchain_image_views[ i ]};
 
     const VkFramebufferCreateInfo framebuffer_info = {
       .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
       .renderPass      = g_engine.render_pass,
       .attachmentCount = 1,
       .pAttachments    = attachments,
-      .width           = g_engine.swap_chain_extent.width,
-      .height          = g_engine.swap_chain_extent.height,
+      .width           = g_engine.swapchain_extent.width,
+      .height          = g_engine.swapchain_extent.height,
       .layers          = 1,
     };
 
@@ -1157,7 +1158,7 @@ static MossResult moss__create_framebuffers (void)
           g_engine.device,
           &framebuffer_info,
           NULL,
-          &g_engine.swap_chain_framebuffers[ i ]
+          &g_engine.swapchain_framebuffers[ i ]
         ) != VK_SUCCESS)
     {
       moss__error ("Failed to create framebuffer %u.\n", i);
@@ -1165,12 +1166,12 @@ static MossResult moss__create_framebuffers (void)
       {
         vkDestroyFramebuffer (
           g_engine.device,
-          g_engine.swap_chain_framebuffers[ j ],
+          g_engine.swapchain_framebuffers[ j ],
           NULL
         );
       }
-      free ((void *)g_engine.swap_chain_framebuffers);
-      g_engine.swap_chain_framebuffers = NULL;
+      free ((void *)g_engine.swapchain_framebuffers);
+      g_engine.swapchain_framebuffers = NULL;
       return MOSS_RESULT_ERROR;
     }
   }
@@ -1233,11 +1234,11 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
   const VkRenderPassBeginInfo render_pass_info = {
     .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
     .renderPass  = g_engine.render_pass,
-    .framebuffer = g_engine.swap_chain_framebuffers[ image_index ],
+    .framebuffer = g_engine.swapchain_framebuffers[ image_index ],
     .renderArea =
       {
                    .offset = {0, 0},
-                   .extent = g_engine.swap_chain_extent,
+                   .extent = g_engine.swapchain_extent,
                    },
     .clearValueCount = 1,
     .pClearValues    = (const VkClearValue[]) {
@@ -1263,58 +1264,58 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
   }
 }
 
-static void moss__cleanup_swap_chain (void)
+static void moss__cleanup_swapchain (void)
 {
   if (g_engine.device == VK_NULL_HANDLE) { return; }
 
-  if (g_engine.swap_chain_framebuffers != NULL)
+  if (g_engine.swapchain_framebuffers != NULL)
   {
-    for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+    for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
     {
-      vkDestroyFramebuffer (g_engine.device, g_engine.swap_chain_framebuffers[ i ], NULL);
+      vkDestroyFramebuffer (g_engine.device, g_engine.swapchain_framebuffers[ i ], NULL);
     }
-    free (g_engine.swap_chain_framebuffers);
-    g_engine.swap_chain_framebuffers = NULL;
+    free (g_engine.swapchain_framebuffers);
+    g_engine.swapchain_framebuffers = NULL;
   }
 
-  if (g_engine.swap_chain_image_views != NULL)
+  if (g_engine.swapchain_image_views != NULL)
   {
-    for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+    for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
     {
-      vkDestroyImageView (g_engine.device, g_engine.swap_chain_image_views[ i ], NULL);
+      vkDestroyImageView (g_engine.device, g_engine.swapchain_image_views[ i ], NULL);
     }
-    free (g_engine.swap_chain_image_views);
-    g_engine.swap_chain_image_views = NULL;
+    free (g_engine.swapchain_image_views);
+    g_engine.swapchain_image_views = NULL;
   }
 
-  if (g_engine.swap_chain_images != NULL)
+  if (g_engine.swapchain_images != NULL)
   {
-    free (g_engine.swap_chain_images);
-    g_engine.swap_chain_images = NULL;
+    free (g_engine.swapchain_images);
+    g_engine.swapchain_images = NULL;
   }
 
-  if (g_engine.swap_chain != VK_NULL_HANDLE)
+  if (g_engine.swapchain != VK_NULL_HANDLE)
   {
-    vkDestroySwapchainKHR (g_engine.device, g_engine.swap_chain, NULL);
-    g_engine.swap_chain = VK_NULL_HANDLE;
+    vkDestroySwapchainKHR (g_engine.device, g_engine.swapchain, NULL);
+    g_engine.swapchain = VK_NULL_HANDLE;
   }
 
-  g_engine.swap_chain_images        = NULL;
-  g_engine.swap_chain_image_count   = 0;
-  g_engine.swap_chain_image_format  = 0;
-  g_engine.swap_chain_extent.width  = 0;
-  g_engine.swap_chain_extent.height = 0;
-  g_engine.swap_chain_image_views   = NULL;
-  g_engine.swap_chain_framebuffers  = NULL;
+  g_engine.swapchain_images        = NULL;
+  g_engine.swapchain_image_count   = 0;
+  g_engine.swapchain_image_format  = 0;
+  g_engine.swapchain_extent.width  = 0;
+  g_engine.swapchain_extent.height = 0;
+  g_engine.swapchain_image_views   = NULL;
+  g_engine.swapchain_framebuffers  = NULL;
 }
 
-static MossResult moss__recreate_swap_chain (uint32_t width, uint32_t height)
+static MossResult moss__recreate_swapchain (uint32_t width, uint32_t height)
 {
   vkDeviceWaitIdle (g_engine.device);
 
-  moss__cleanup_swap_chain ( );
+  moss__cleanup_swapchain ( );
 
-  if (moss__create_swap_chain (width, height) != MOSS_RESULT_SUCCESS)
+  if (moss__create_swapchain (width, height) != MOSS_RESULT_SUCCESS)
   {
     return MOSS_RESULT_ERROR;
   }
