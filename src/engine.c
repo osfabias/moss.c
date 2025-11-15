@@ -48,7 +48,10 @@
     ENGINE STATE
   =============================================================================*/
 
-#define MAX_FRAMES_IN_FLIGHT 2
+#define MAX_FRAMES_IN_FLIGHT (uint32_t)(2)
+
+/* Max image count in swapchain. */
+#define MAX_SWAPCHAIN_IMAGE_COUNT (uint32_t)(4)
 
 /*
   @brief Engine state.
@@ -56,48 +59,70 @@
 typedef struct
 {
   /* Window. */
-  StuffyWindow *window; /* Window handle. */
+  /* Window handle. */
+  StuffyWindow *window;
 
   /* Vulkan instance and surface. */
-  VkInstance   api_instance; /* Vulkan instance. */
-  VkSurfaceKHR surface;      /* Window surface. */
+  /* Vulkan instance. */
+  VkInstance api_instance;
+  /* Window surface. */
+  VkSurfaceKHR surface;
 
   /* Physical and logical device. */
-  VkPhysicalDevice         physical_device;      /* Physical device. */
-  VkDevice                 device;               /* Logical device. */
-  Moss__QueueFamilyIndices queue_family_indices; /* Queue family indices. */
-  VkQueue                  graphics_queue;       /* Graphics queue. */
-  VkQueue                  present_queue;        /* Present queue. */
+  /* Physical device. */
+  VkPhysicalDevice physical_device;
+  /* Logical device. */
+  VkDevice device;
+  /* Queue family indices. */
+  Moss__QueueFamilyIndices queue_family_indices;
+  /* Graphics queue. */
+  VkQueue graphics_queue;
+  /* Present queue. */
+  VkQueue present_queue;
 
   /* Swap chain. */
-  VkSwapchainKHR swapchain;              /* Swap chain. */
-  VkImage       *swapchain_images;       /* Swap chain images. */
-  uint32_t       swapchain_image_count;  /* Number of swap chain images. */
-  VkFormat       swapchain_image_format; /* Swap chain image format. */
-  VkExtent2D     swapchain_extent;       /* Swap chain extent. */
-  VkImageView   *swapchain_image_views;  /* Swap chain image views. */
-  VkFramebuffer *swapchain_framebuffers; /* Swap chain framebuffers. */
-  bool framebuffer_resize_requsted; /* Flag that shows, that the framebuffer resize was
-                                       requested, but not performed yet. */
+  /* Swap chain. */
+  VkSwapchainKHR swapchain;
+  /* Swap chain images. */
+  VkImage swapchain_images[ MAX_SWAPCHAIN_IMAGE_COUNT ];
+  /* Number of swap chain images. */
+  uint32_t swapchain_image_count;
+  /* Swap chain image format. */
+  VkFormat swapchain_image_format;
+  /* Swap chain extent. */
+  VkExtent2D swapchain_extent;
+  /* Swap chain image views. */
+  VkImageView swapchain_image_views[ MAX_SWAPCHAIN_IMAGE_COUNT ];
+  /* Swap chain framebuffers. */
+  VkFramebuffer swapchain_framebuffers[ MAX_SWAPCHAIN_IMAGE_COUNT ];
+  /* Flag that shows, that the framebuffer resize was requested, but not performed yet. */
+  bool framebuffer_resize_requsted;
 
   /* Render pipeline. */
-  VkRenderPass     render_pass;       /* Render pass. */
-  VkPipelineLayout pipeline_layout;   /* Pipeline layout. */
-  VkPipeline       graphics_pipeline; /* Graphics pipeline. */
+  /* Render pass. */
+  VkRenderPass render_pass;
+  /* Pipeline layout. */
+  VkPipelineLayout pipeline_layout;
+  /* Graphics pipeline. */
+  VkPipeline graphics_pipeline;
 
   /* Command buffers. */
-  VkCommandPool   command_pool;                            /* Command pool. */
-  VkCommandBuffer command_buffers[ MAX_FRAMES_IN_FLIGHT ]; /* Command buffers. */
+  /* Command pool. */
+  VkCommandPool command_pool;
+  /* Command buffers. */
+  VkCommandBuffer command_buffers[ MAX_FRAMES_IN_FLIGHT ];
 
   /* Synchronization objects. */
-  VkSemaphore
-    image_available_semaphores[ MAX_FRAMES_IN_FLIGHT ]; /* Image available semaphores. */
-  VkSemaphore
-    render_finished_semaphores[ MAX_FRAMES_IN_FLIGHT ]; /* Render finished semaphores. */
-  VkFence in_flight_fences[ MAX_FRAMES_IN_FLIGHT ];     /* In-flight fences. */
+  /* Image available semaphores. */
+  VkSemaphore image_available_semaphores[ MAX_FRAMES_IN_FLIGHT ];
+  /* Render finished semaphores. */
+  VkSemaphore render_finished_semaphores[ MAX_FRAMES_IN_FLIGHT ];
+  /* In-flight fences. */
+  VkFence in_flight_fences[ MAX_FRAMES_IN_FLIGHT ];
 
   /* Frame state. */
-  uint32_t current_frame; /* Current frame index. */
+  /* Current frame index. */
+  uint32_t current_frame;
 } Moss__Engine;
 
 /*
@@ -123,12 +148,12 @@ static Moss__Engine g_engine = {
 
   /* Swap chain. */
   .swapchain                   = VK_NULL_HANDLE,
-  .swapchain_images            = NULL,
+  .swapchain_images            = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
   .swapchain_image_count       = 0,
   .swapchain_image_format      = 0,
-  .swapchain_extent            = (VkExtent2D) {.width = 0,     .height = 0   },
-  .swapchain_image_views       = NULL,
-  .swapchain_framebuffers      = NULL,
+  .swapchain_extent            = (VkExtent2D) {.width = 0, .height = 0},
+  .swapchain_image_views       = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
+  .swapchain_framebuffers      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
   .framebuffer_resize_requsted = false,
 
   /* Render pipeline. */
@@ -326,11 +351,6 @@ inline static void moss__cleanup_swapchain_framebuffers (void);
   @brief Cleans up swapchain image views.
 */
 inline static void moss__cleanup_swapchain_image_views (void);
-
-/*
-  @brief Cleans up swapchain images array.
-*/
-inline static void moss__cleanup_swapchain_images (void);
 
 /*
   @brief Cleans up swapchain handle.
@@ -919,8 +939,6 @@ moss__create_swapchain (const uint32_t width, const uint32_t height)
     &g_engine.swapchain_image_count,
     NULL
   );
-  g_engine.swapchain_images =
-    (VkImage *)malloc (g_engine.swapchain_image_count * sizeof (VkImage));
   vkGetSwapchainImagesKHR (
     g_engine.device,
     g_engine.swapchain,
@@ -938,9 +956,6 @@ moss__create_swapchain (const uint32_t width, const uint32_t height)
 
 inline static MossResult moss__create_image_views (void)
 {
-  g_engine.swapchain_image_views =
-    (VkImageView *)malloc (g_engine.swapchain_image_count * sizeof (VkImageView));
-
   for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
     const VkImageViewCreateInfo create_info = {
@@ -976,8 +991,6 @@ inline static MossResult moss__create_image_views (void)
       {
         vkDestroyImageView (g_engine.device, g_engine.swapchain_image_views[ j ], NULL);
       }
-      free (g_engine.swapchain_image_views);
-      g_engine.swapchain_image_views = NULL;
       return MOSS_RESULT_ERROR;
     }
   }
@@ -1208,9 +1221,6 @@ inline static MossResult moss__create_graphics_pipeline (void)
 
 inline static MossResult moss__create_framebuffers (void)
 {
-  g_engine.swapchain_framebuffers =
-    (VkFramebuffer *)malloc (g_engine.swapchain_image_count * sizeof (VkFramebuffer));
-
   for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
     const VkImageView attachments[] = {g_engine.swapchain_image_views[ i ]};
@@ -1241,8 +1251,6 @@ inline static MossResult moss__create_framebuffers (void)
           NULL
         );
       }
-      free ((void *)g_engine.swapchain_framebuffers);
-      g_engine.swapchain_framebuffers = NULL;
       return MOSS_RESULT_ERROR;
     }
   }
@@ -1354,36 +1362,23 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
 
 inline static void moss__cleanup_swapchain_framebuffers (void)
 {
-  if (g_engine.swapchain_framebuffers != NULL)
+  for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
-    for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
-    {
-      vkDestroyFramebuffer (g_engine.device, g_engine.swapchain_framebuffers[ i ], NULL);
-    }
-    free ((void *)g_engine.swapchain_framebuffers);
-    g_engine.swapchain_framebuffers = NULL;
+    if (g_engine.swapchain_framebuffers[ i ] == VK_NULL_HANDLE) { continue; }
+
+    vkDestroyFramebuffer (g_engine.device, g_engine.swapchain_framebuffers[ i ], NULL);
+    g_engine.swapchain_framebuffers[ i ] = VK_NULL_HANDLE;
   }
 }
 
 inline static void moss__cleanup_swapchain_image_views (void)
 {
-  if (g_engine.swapchain_image_views != NULL)
+  for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
-    for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
-    {
-      vkDestroyImageView (g_engine.device, g_engine.swapchain_image_views[ i ], NULL);
-    }
-    free ((void *)g_engine.swapchain_image_views);
-    g_engine.swapchain_image_views = NULL;
-  }
-}
+    if (g_engine.swapchain_image_views[ i ] == VK_NULL_HANDLE) { continue; }
 
-inline static void moss__cleanup_swapchain_images (void)
-{
-  if (g_engine.swapchain_images != NULL)
-  {
-    free ((void *)g_engine.swapchain_images);
-    g_engine.swapchain_images = NULL;
+    vkDestroyImageView (g_engine.device, g_engine.swapchain_image_views[ i ], NULL);
+    g_engine.swapchain_image_views[ i ] = VK_NULL_HANDLE;
   }
 }
 
@@ -1400,7 +1395,6 @@ inline static void moss__cleanup_swapchain (void)
 {
   moss__cleanup_swapchain_framebuffers ( );
   moss__cleanup_swapchain_image_views ( );
-  moss__cleanup_swapchain_images ( );
   moss__cleanup_swapchain_handle ( );
 
   g_engine.swapchain_image_count  = 0;
