@@ -1359,8 +1359,23 @@ inline static void moss__cleanup_swapchain (void)
   g_engine.swapchain_framebuffers  = NULL;
 }
 
+inline static void moss__wait_while_window_is_minimized (void)
+{
+  StuffyWindowRect rect = stuffy_window_get_rect (g_engine.window);
+
+  moss__info ("Waiting while window is minized...\n");
+  while (rect.width == 0 || rect.height == 0)
+  {
+    rect = stuffy_window_get_rect (g_engine.window);
+    stuffy_app_update ( );
+  }
+  moss__info ("Window just maximized, stop waiting.\n");
+}
+
 inline static MossResult moss__recreate_swapchain (uint32_t width, uint32_t height)
 {
+  moss__wait_while_window_is_minimized ( );
+
   vkDeviceWaitIdle (g_engine.device);
 
   moss__cleanup_swapchain ( );
