@@ -39,7 +39,6 @@
 #include "src/internal/app_info.h"
 #include "src/internal/crate.h"
 #include "src/internal/log.h"
-#include "src/internal/memory_utils.h"
 #include "src/internal/shaders.h"
 #include "src/internal/vertex.h"
 #include "src/internal/vk_command_pool_utils.h"
@@ -48,6 +47,7 @@
 #include "src/internal/vk_shader_utils.h"
 #include "src/internal/vk_swapchain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
+#include "vulkan/vulkan_core.h"
 
 /*=============================================================================
     TEMPO
@@ -55,10 +55,14 @@
 
 /* Vertex array just for implementing vertex buffers. */
 static const MossVertex g_verticies[ 4 ] = {
-  { { 0.0F, -0.5F }, { 1.0F, 0.0F, 0.0F } },
-  {  { 0.5F, 0.5F }, { 0.0F, 1.0F, 0.0F } },
-  { { -0.5F, 0.5F }, { 0.0F, 0.0F, 1.0F } },
+  { { -0.5F, -0.5F }, { 1.0F, 0.0F, 0.0F } },
+  {  { 0.5F, -0.5F }, { 0.0F, 1.0F, 0.0F } },
+  {   { 0.5F, 0.5F }, { 0.0F, 0.0F, 1.0F } },
+  {  { -0.5F, 0.5F }, { 1.0F, 1.0F, 1.0F } }
 };
+
+/* Index array just for implementing index buffers. */
+static const uint16_t g_indices[ 6 ] = { 0, 1, 2, 2, 3, 0 };
 
 /*=============================================================================
     ENGINE STATE
@@ -132,9 +136,11 @@ typedef struct
   /* Graphics pipeline. */
   VkPipeline graphics_pipeline;
 
-  /* === Vertex buffers === */
-  /* Vertex buffer. */
+  /* === Vertex and index buffers === */
+  /* Vertex crate. */
   Moss__Crate vertex_crate;
+  /* Index crate. */
+  Moss__Crate index_crate;
 
   /* === Command buffers === */
   /* General command pool. */
@@ -203,6 +209,7 @@ static Moss__Engine g_engine = {
 
   /* Vertex buffers. */
   .vertex_crate = {0},
+  .index_crate = {0},
 
   /* Command buffers. */
   .general_command_pool    = VK_NULL_HANDLE,
@@ -335,6 +342,18 @@ inline static MossResult moss__create_vertex_crate (void);
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
 inline static MossResult moss__fill_vertex_crate (void);
+
+/*
+  @brief Creates index buffer.
+  @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
+*/
+inline static MossResult moss__create_index_crate (void);
+
+/*
+  @brief Fills index crate with index data.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
+*/
+inline static MossResult moss__fill_index_crate (void);
 
 /*
   @brief Creates command buffers.
@@ -579,6 +598,18 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     return MOSS_RESULT_ERROR;
   }
 
+  if (moss__create_index_crate ( ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__fill_index_crate ( ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
   if (moss__create_general_command_buffers ( ) != MOSS_RESULT_SUCCESS)
   {
     moss_engine_deinit ( );
@@ -620,6 +651,8 @@ void moss_engine_deinit (void)
       vkDestroyCommandPool (g_engine.device, g_engine.general_command_pool, NULL);
       g_engine.general_command_pool = VK_NULL_HANDLE;
     }
+
+    moss__destroy_crate (&g_engine.index_crate);
 
     moss__destroy_crate (&g_engine.vertex_crate);
 
@@ -1429,7 +1462,7 @@ inline static MossResult moss__create_framebuffers (void)
 
 inline static MossResult moss__create_vertex_crate (void)
 {
-  Moss__CrateCreateInfo create_info = {
+  const Moss__CrateCreateInfo create_info = {
     .size  = sizeof (g_verticies),
     .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
     .memory_properties               = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1452,6 +1485,38 @@ inline static MossResult moss__fill_vertex_crate (void)
     .destination_crate = &g_engine.vertex_crate,
     .source_memory     = (void *)g_verticies,
     .size              = sizeof (g_verticies),
+    .transfer_queue    = g_engine.transfer_queue,
+    .command_pool      = g_engine.transfer_command_pool,
+  };
+
+  return moss__fill_crate (&fill_info);
+}
+
+inline static MossResult moss__create_index_crate (void)
+{
+  const Moss__CrateCreateInfo create_info = {
+    .size  = sizeof (g_verticies),
+    .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    .memory_properties               = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    .sharing_mode                    = g_engine.buffer_sharing_mode,
+    .shared_queue_family_index_count = g_engine.shared_queue_family_index_count,
+    .shared_queue_family_indices     = g_engine.shared_queue_family_indices,
+    .device                          = g_engine.device,
+    .physical_device                 = g_engine.physical_device,
+  };
+
+  const MossResult result = moss__create_crate (&create_info, &g_engine.index_crate);
+  if (result != MOSS_RESULT_SUCCESS) { moss__error ("Failed to create vertex crate.\n"); }
+
+  return result;
+}
+
+inline static MossResult moss__fill_index_crate (void)
+{
+  const Moss__FillCrateInfo fill_info = {
+    .destination_crate = &g_engine.index_crate,
+    .source_memory     = (void *)g_indices,
+    .size              = sizeof (g_indices),
     .transfer_queue    = g_engine.transfer_queue,
     .command_pool      = g_engine.transfer_command_pool,
   };
@@ -1540,7 +1605,21 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
 
   vkCmdBindVertexBuffers (command_buffer, 0, 1, vertex_buffers, vertex_buffer_offsets);
 
-  vkCmdDraw (command_buffer, sizeof (g_verticies) / sizeof (g_verticies[ 0 ]), 1, 0, 0);
+  vkCmdBindIndexBuffer (
+    command_buffer,
+    g_engine.index_crate.buffer,
+    0,
+    VK_INDEX_TYPE_UINT16
+  );
+
+  vkCmdDrawIndexed (
+    command_buffer,
+    sizeof (g_indices) / sizeof (g_indices[ 0 ]),
+    1,
+    0,
+    0,
+    0
+  );
 
   vkCmdEndRenderPass (command_buffer);
 
