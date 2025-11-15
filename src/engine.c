@@ -21,35 +21,86 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <vulkan/vulkan.h>
+
+#include <stuffy/app.h>
+#include <stuffy/vulkan.h>
+#include <stuffy/window.h>
 
 #include "moss/app_info.h"
 #include "moss/engine.h"
 #include "moss/result.h"
+#include "moss/window_config.h"
 
 #include "src/internal/app_info.h"
 #include "src/internal/log.h"
+#include "src/internal/shaders.h"
 #include "src/internal/vk_instance_utils.h"
+#include "src/internal/vk_physical_device_utils.h"
+#include "src/internal/vk_shader_utils.h"
+#include "src/internal/vk_swap_chain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
-#include "vulkan/vulkan_core.h"
 
 /*=============================================================================
     ENGINE STATE
   =============================================================================*/
+
+#define MAX_FRAMES_IN_FLIGHT 2
 
 /*
   @brief Engine state.
 */
 typedef struct
 {
-  VkInstance api_instance;
+  /* Window. */
+  Window *window; /* Window handle. */
+
+  /* Vulkan instance and surface. */
+  VkInstance   api_instance; /* Vulkan instance. */
+  VkSurfaceKHR surface;      /* Window surface. */
+
+  /* Physical and logical device. */
+  VkPhysicalDevice         physical_device;      /* Physical device. */
+  VkDevice                 device;               /* Logical device. */
+  Moss__QueueFamilyIndices queue_family_indices; /* Queue family indices. */
+  VkQueue                  graphics_queue;       /* Graphics queue. */
+  VkQueue                  present_queue;        /* Present queue. */
+
+  /* Swap chain. */
+  VkSwapchainKHR swap_chain;              /* Swap chain. */
+  VkImage       *swap_chain_images;       /* Swap chain images. */
+  uint32_t       swap_chain_image_count;  /* Number of swap chain images. */
+  VkFormat       swap_chain_image_format; /* Swap chain image format. */
+  VkExtent2D     swap_chain_extent;       /* Swap chain extent. */
+  VkImageView   *swap_chain_image_views;  /* Swap chain image views. */
+  VkFramebuffer *swap_chain_framebuffers; /* Swap chain framebuffers. */
+
+  /* Render pipeline. */
+  VkRenderPass     render_pass;       /* Render pass. */
+  VkPipelineLayout pipeline_layout;   /* Pipeline layout. */
+  VkPipeline       graphics_pipeline; /* Graphics pipeline. */
+
+  /* Command buffers. */
+  VkCommandPool    command_pool;    /* Command pool. */
+  VkCommandBuffer *command_buffers; /* Command buffers. */
+
+  /* Synchronization objects. */
+  VkSemaphore
+    image_available_semaphores[ MAX_FRAMES_IN_FLIGHT ]; /* Image available semaphores. */
+  VkSemaphore
+    render_finished_semaphores[ MAX_FRAMES_IN_FLIGHT ]; /* Render finished semaphores. */
+  VkFence in_flight_fences[ MAX_FRAMES_IN_FLIGHT ];     /* In-flight fences. */
+
+  /* Frame state. */
+  uint32_t current_frame; /* Current frame index. */
 } Moss__Engine;
 
 /*
   @brief Global engine state.
 */
-static Moss__Engine g_engine;
+static Moss__Engine g_engine = {0};
 
 /*=============================================================================
     INTERNAL FUNCTION DECLARATIONS
@@ -58,9 +109,162 @@ static Moss__Engine g_engine;
 /*
   @brief Creates Vulkan API instance.
   @param app_info A pointer to a native moss app info struct.
-  @return Returns the result code of vkCreateInstance call.
+  @return Returns VK_SUCCESS on success, error code otherwise.
 */
-VkResult moss__create_api_instance (const MossAppInfo *app_info);
+static VkResult moss__create_api_instance (const MossAppInfo *app_info);
+
+/*
+  @brief Initializes stuffy app.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__init_stuffy_app (void);
+
+/*
+  @brief Deinitializes stuffy app.
+*/
+static void moss__deinit_stuffy_app (void);
+
+/*
+  @brief Creates window.
+  @param window_config Window configuration.
+  @param app_name Application name for window title.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult
+moss__create_window (const MossWindowConfig *window_config, const char *app_name);
+
+/*
+  @brief Creates window surface.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_surface (void);
+
+/*
+  @brief Creates logical device and queues.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_logical_device (void);
+
+/*
+  @brief Creates swap chain.
+  @param width Window width.
+  @param height Window height.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_swap_chain (uint32_t width, uint32_t height);
+
+/*
+  @brief Creates image views for swap chain images.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_image_views (void);
+
+/*
+  @brief Creates render pass.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_render_pass (void);
+
+/*
+  @brief Creates graphics pipeline.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_graphics_pipeline (void);
+
+/*
+  @brief Creates framebuffers.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_framebuffers (void);
+
+/*
+  @brief Creates command pool.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_command_pool (void);
+
+/*
+  @brief Creates command buffers.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_command_buffers (void);
+
+/*
+  @brief Creates image available semaphores.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_image_available_semaphores (void);
+
+/*
+  @brief Creates render finished semaphores.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_render_finished_semaphores (void);
+
+/*
+  @brief Creates in-flight fences.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_in_flight_fences (void);
+
+/*
+  @brief Creates synchronization objects (semaphores and fences).
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_synchronization_objects (void);
+
+/*
+  @brief Cleans up semaphores array.
+  @param semaphores Array of semaphores to clean up.
+*/
+static void moss__cleanup_semaphores (VkSemaphore *semaphores);
+
+/*
+  @brief Cleans up fences array.
+  @param fences Array of fences to clean up.
+*/
+static void moss__cleanup_fences (VkFence *fences);
+
+/*
+  @brief Cleans up image available semaphores.
+*/
+static void moss__cleanup_image_available_semaphores (void);
+
+/*
+  @brief Cleans up render finished semaphores.
+*/
+static void moss__cleanup_render_finished_semaphores (void);
+
+/*
+  @brief Cleans up in-flight fences.
+*/
+static void moss__cleanup_in_flight_fences (void);
+
+/*
+  @brief Cleans up synchronization objects.
+*/
+static void moss__cleanup_synchronization_objects (void);
+
+/*
+  @brief Records command buffer.
+  @param command_buffer Command buffer to record.
+  @param image_index Swap chain image index.
+*/
+static void
+moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_index);
+
+/*
+  @brief Cleans up swap chain resources.
+*/
+static void moss__cleanup_swap_chain (void);
+
+/*
+  @brief Recreates swap chain.
+  @param width Window width.
+  @param height Window height.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__recreate_swap_chain (uint32_t width, uint32_t height);
 
 /*=============================================================================
     PUBLIC API FUNCTIONS IMPLEMENTATION
@@ -68,29 +272,322 @@ VkResult moss__create_api_instance (const MossAppInfo *app_info);
 
 /*
   @brief Initializes engine instance.
-  @return Returns a pointer to an engine instance on success, otherwise returns NULL.
+  @param config Engine configuration.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
 MossResult moss_engine_init (const MossEngineConfig *const config)
 {
-  if (moss__create_api_instance (config->app_info) != VK_SUCCESS)
+  memset (&g_engine, 0, sizeof (g_engine));
+
+  if (moss__init_stuffy_app ( ) != VK_SUCCESS) { return MOSS_RESULT_ERROR; }
+
+  if (moss__create_window (config->window_config, config->app_info->app_name) !=
+      VK_SUCCESS)
   {
+    moss_engine_deinit ( );
     return MOSS_RESULT_ERROR;
   }
+
+  if (moss__create_api_instance (config->app_info) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_surface ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__select_physical_device (
+        g_engine.api_instance,
+        g_engine.surface,
+        &g_engine.physical_device
+      ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  g_engine.queue_family_indices =
+    moss__find_queue_families (g_engine.physical_device, g_engine.surface);
+
+  if (moss__create_logical_device ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  vkGetDeviceQueue (
+    g_engine.device,
+    g_engine.queue_family_indices.graphics_family,
+    0,
+    &g_engine.graphics_queue
+  );
+  vkGetDeviceQueue (
+    g_engine.device,
+    g_engine.queue_family_indices.present_family,
+    0,
+    &g_engine.present_queue
+  );
+
+  if (moss__create_swap_chain (
+        config->window_config->width,
+        config->window_config->height
+      ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_image_views ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_render_pass ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_graphics_pipeline ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_framebuffers ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_command_pool ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_command_buffers ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__create_synchronization_objects ( ) != VK_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  g_engine.current_frame = 0;
 
   return MOSS_RESULT_SUCCESS;
 }
 
 /*
   @brief Destroys engine instance.
-  @details Cleans up all reserved memory and destroys all GraphicsAPI objects.kjA
+  @details Cleans up all reserved memory and destroys all GraphicsAPI objects.
 */
-void moss_engine_deinit (void) { vkDestroyInstance (g_engine.api_instance, NULL); }
+void moss_engine_deinit (void)
+{
+  if (g_engine.device != VK_NULL_HANDLE) { vkDeviceWaitIdle (g_engine.device); }
+
+  moss__cleanup_swap_chain ( );
+  moss__cleanup_synchronization_objects ( );
+
+  if (g_engine.device != VK_NULL_HANDLE)
+  {
+    if (g_engine.command_pool != VK_NULL_HANDLE)
+    {
+      vkDestroyCommandPool (g_engine.device, g_engine.command_pool, NULL);
+      g_engine.command_pool = VK_NULL_HANDLE;
+    }
+
+    if (g_engine.graphics_pipeline != VK_NULL_HANDLE)
+    {
+      vkDestroyPipeline (g_engine.device, g_engine.graphics_pipeline, NULL);
+      g_engine.graphics_pipeline = VK_NULL_HANDLE;
+    }
+
+    if (g_engine.pipeline_layout != VK_NULL_HANDLE)
+    {
+      vkDestroyPipelineLayout (g_engine.device, g_engine.pipeline_layout, NULL);
+      g_engine.pipeline_layout = VK_NULL_HANDLE;
+    }
+
+    if (g_engine.render_pass != VK_NULL_HANDLE)
+    {
+      vkDestroyRenderPass (g_engine.device, g_engine.render_pass, NULL);
+      g_engine.render_pass = VK_NULL_HANDLE;
+    }
+
+    vkDestroyDevice (g_engine.device, NULL);
+    g_engine.device = VK_NULL_HANDLE;
+  }
+
+  if (g_engine.surface != VK_NULL_HANDLE)
+  {
+    vkDestroySurfaceKHR (g_engine.api_instance, g_engine.surface, NULL);
+  }
+
+  if (g_engine.api_instance != VK_NULL_HANDLE)
+  {
+    vkDestroyInstance (g_engine.api_instance, NULL);
+  }
+
+  if (g_engine.window != NULL)
+  {
+    close_window (g_engine.window);
+    g_engine.window = NULL;
+  }
+
+  moss__deinit_stuffy_app ( );
+
+  memset (&g_engine, 0, sizeof (g_engine));
+}
+
+/*
+  @brief Checks if the window should close.
+  @return Returns true if window should close, false otherwise.
+*/
+bool moss_engine_should_close (void)
+{
+  if (g_engine.window == NULL) { return true; }
+  update_app ( );
+  return should_window_close (g_engine.window);
+}
+
+/*
+  @brief Draws a frame.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
+*/
+MossResult moss_engine_draw_frame (void)
+{
+  if (g_engine.device == VK_NULL_HANDLE || g_engine.swap_chain == VK_NULL_HANDLE)
+  {
+    return MOSS_RESULT_ERROR;
+  }
+
+  vkWaitForFences (
+    g_engine.device,
+    1,
+    &g_engine.in_flight_fences[ g_engine.current_frame ],
+    VK_TRUE,
+    UINT64_MAX
+  );
+
+  uint32_t image_index;
+  VkResult result = vkAcquireNextImageKHR (
+    g_engine.device,
+    g_engine.swap_chain,
+    UINT64_MAX,
+    g_engine.image_available_semaphores[ g_engine.current_frame ],
+    VK_NULL_HANDLE,
+    &image_index
+  );
+
+  if (result == VK_ERROR_OUT_OF_DATE_KHR)
+  {
+    // Swap chain is out of date, need to recreate before we can acquire image
+    const WindowRect window_rect = get_window_rect (g_engine.window);
+    if (moss__recreate_swap_chain (window_rect.width, window_rect.height) != VK_SUCCESS)
+    {
+      return MOSS_RESULT_ERROR;
+    }
+    // Retry acquiring image after recreation
+    return MOSS_RESULT_SUCCESS;
+  }
+
+  if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+  {
+    moss__error ("Failed to acquire swap chain image.\n");
+    return MOSS_RESULT_ERROR;
+  }
+
+  vkResetFences (
+    g_engine.device,
+    1,
+    &g_engine.in_flight_fences[ g_engine.current_frame ]
+  );
+
+  vkResetCommandBuffer (g_engine.command_buffers[ g_engine.current_frame ], 0);
+  moss__record_command_buffer (
+    g_engine.command_buffers[ g_engine.current_frame ],
+    image_index
+  );
+
+  const VkSubmitInfo submit_info = {
+    .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores    = &g_engine.image_available_semaphores[ g_engine.current_frame ],
+    .pWaitDstStageMask =
+      (const VkPipelineStageFlags[]) {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
+    .commandBufferCount   = 1,
+    .pCommandBuffers      = &g_engine.command_buffers[ g_engine.current_frame ],
+    .signalSemaphoreCount = 1,
+    .pSignalSemaphores = &g_engine.render_finished_semaphores[ g_engine.current_frame ],
+  };
+
+  if (vkQueueSubmit (
+        g_engine.graphics_queue,
+        1,
+        &submit_info,
+        g_engine.in_flight_fences[ g_engine.current_frame ]
+      ) != VK_SUCCESS)
+  {
+    moss__error ("Failed to submit draw command buffer.\n");
+    return MOSS_RESULT_ERROR;
+  }
+
+  const VkPresentInfoKHR present_info = {
+    .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores    = &g_engine.render_finished_semaphores[ g_engine.current_frame ],
+    .swapchainCount     = 1,
+    .pSwapchains        = &g_engine.swap_chain,
+    .pImageIndices      = &image_index,
+  };
+
+  result = vkQueuePresentKHR (g_engine.present_queue, &present_info);
+
+  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+  {
+    // Swap chain is out of date or suboptimal, need to recreate
+    const WindowRect window_rect = get_window_rect (g_engine.window);
+    if (moss__recreate_swap_chain (window_rect.width, window_rect.height) != VK_SUCCESS)
+    {
+      return MOSS_RESULT_ERROR;
+    }
+    // If it was suboptimal, we still rendered successfully, so return success
+    if (result == VK_SUBOPTIMAL_KHR)
+    {
+      g_engine.current_frame = (g_engine.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+      return MOSS_RESULT_SUCCESS;
+    }
+    // If it was out of date, we didn't present, so skip frame increment
+    return MOSS_RESULT_SUCCESS;
+  }
+
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to present swap chain image.\n");
+    return MOSS_RESULT_ERROR;
+  }
+
+  g_engine.current_frame = (g_engine.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+  return MOSS_RESULT_SUCCESS;
+}
 
 /*=============================================================================
     INTERNAL FUNCTIONS IMPLEMENTATION
   =============================================================================*/
 
-VkResult moss__create_api_instance (const MossAppInfo *const app_info)
+static VkResult moss__create_api_instance (const MossAppInfo *const app_info)
 {
   // Set up validation layers
 #ifdef NDEBUG
@@ -142,4 +639,833 @@ VkResult moss__create_api_instance (const MossAppInfo *const app_info)
   }
 
   return result;
+}
+
+static VkResult moss__init_stuffy_app (void)
+{
+  init_app ( );
+  return VK_SUCCESS;
+}
+
+static void moss__deinit_stuffy_app (void) { deinit_app ( ); }
+
+static VkResult
+moss__create_window (const MossWindowConfig *window_config, const char *app_name)
+{
+  const WindowConf stuffy_window_config = {
+    .rect =
+      {
+             .x      = 128,
+             .y      = 128,
+             .width  = window_config->width,
+             .height = window_config->height,
+             },
+    .title      = app_name,
+    .style_mask = WINDOW_STYLE_TITLED_BIT | WINDOW_STYLE_CLOSABLE_BIT |
+                  WINDOW_STYLE_RESIZABLE_BIT | WINDOW_STYLE_ICONIFIABLE_BIT,
+  };
+
+  g_engine.window = open_window (&stuffy_window_config);
+  if (g_engine.window == NULL)
+  {
+    moss__error ("Failed to create window.\n");
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+static VkResult moss__create_surface (void)
+{
+  const VkSurfaceCreateInfo create_info = {
+    .window    = g_engine.window,
+    .instance  = g_engine.api_instance,
+    .allocator = NULL,
+  };
+
+  const VkResult result = create_vk_surface (&create_info, &g_engine.surface);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create window surface. Error code: %d.\n", result);
+  }
+
+  return result;
+}
+
+static VkResult moss__create_logical_device (void)
+{
+  const VkDeviceExtensions device_extensions = get_required_vk_device_extensions ( );
+
+  uint32_t                queue_create_info_count = 0;
+  VkDeviceQueueCreateInfo queue_create_infos[ 2 ];
+  float                   queue_priority = 1.0F;
+
+  VkDeviceQueueCreateInfo graphics_queue_create_info = {
+    .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+    .queueFamilyIndex = g_engine.queue_family_indices.graphics_family,
+    .queueCount       = 1,
+    .pQueuePriorities = &queue_priority,
+  };
+  queue_create_infos[ queue_create_info_count++ ] = graphics_queue_create_info;
+
+  if (g_engine.queue_family_indices.graphics_family !=
+      g_engine.queue_family_indices.present_family)
+  {
+    VkDeviceQueueCreateInfo present_queue_create_info = {
+      .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = g_engine.queue_family_indices.present_family,
+      .queueCount       = 1,
+      .pQueuePriorities = &queue_priority,
+    };
+    queue_create_infos[ queue_create_info_count++ ] = present_queue_create_info;
+  }
+
+  VkPhysicalDeviceFeatures device_features = {0};
+
+  const VkDeviceCreateInfo create_info = {
+    .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+    .queueCreateInfoCount    = queue_create_info_count,
+    .pQueueCreateInfos       = queue_create_infos,
+    .enabledExtensionCount   = device_extensions.count,
+    .ppEnabledExtensionNames = device_extensions.names,
+    .pEnabledFeatures        = &device_features,
+  };
+
+  const VkResult result =
+    vkCreateDevice (g_engine.physical_device, &create_info, NULL, &g_engine.device);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create logical device. Error code: %d.\n", result);
+  }
+
+  return result;
+}
+
+static VkResult moss__create_swap_chain (uint32_t width, uint32_t height)
+{
+  Moss__SwapChainSupportDetails swap_chain_support =
+    moss__query_swap_chain_support (g_engine.physical_device, g_engine.surface);
+
+  const VkSurfaceFormatKHR surface_format = moss__choose_swap_surface_format (
+    swap_chain_support.formats,
+    swap_chain_support.format_count
+  );
+  const VkPresentModeKHR present_mode = moss__choose_swap_present_mode (
+    swap_chain_support.present_modes,
+    swap_chain_support.present_mode_count
+  );
+  const VkExtent2D extent =
+    moss__choose_swap_extent (&swap_chain_support.capabilities, width, height);
+
+  uint32_t image_count = swap_chain_support.capabilities.minImageCount + 1;
+  if (swap_chain_support.capabilities.maxImageCount > 0 &&
+      image_count > swap_chain_support.capabilities.maxImageCount)
+  {
+    image_count = swap_chain_support.capabilities.maxImageCount;
+  }
+
+  VkSwapchainCreateInfoKHR create_info = {
+    .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+    .surface          = g_engine.surface,
+    .minImageCount    = image_count,
+    .imageFormat      = surface_format.format,
+    .imageColorSpace  = surface_format.colorSpace,
+    .imageExtent      = extent,
+    .imageArrayLayers = 1,
+    .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+    .preTransform     = swap_chain_support.capabilities.currentTransform,
+    .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+    .presentMode      = present_mode,
+    .clipped          = VK_TRUE,
+    .oldSwapchain     = VK_NULL_HANDLE,
+  };
+
+  uint32_t queue_family_indices[] = {
+    g_engine.queue_family_indices.graphics_family,
+    g_engine.queue_family_indices.present_family,
+  };
+
+  if (g_engine.queue_family_indices.graphics_family !=
+      g_engine.queue_family_indices.present_family)
+  {
+    create_info.imageSharingMode      = VK_SHARING_MODE_CONCURRENT;
+    create_info.queueFamilyIndexCount = 2;
+    create_info.pQueueFamilyIndices   = queue_family_indices;
+  }
+  else {
+    create_info.imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE;
+    create_info.queueFamilyIndexCount = 0;
+    create_info.pQueueFamilyIndices   = NULL;
+  }
+
+  VkResult result =
+    vkCreateSwapchainKHR (g_engine.device, &create_info, NULL, &g_engine.swap_chain);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create swap chain. Error code: %d.\n", result);
+    moss__free_swap_chain_support_details (&swap_chain_support);
+    return result;
+  }
+
+  vkGetSwapchainImagesKHR (
+    g_engine.device,
+    g_engine.swap_chain,
+    &g_engine.swap_chain_image_count,
+    NULL
+  );
+  g_engine.swap_chain_images =
+    malloc (g_engine.swap_chain_image_count * sizeof (VkImage));
+  vkGetSwapchainImagesKHR (
+    g_engine.device,
+    g_engine.swap_chain,
+    &g_engine.swap_chain_image_count,
+    g_engine.swap_chain_images
+  );
+
+  g_engine.swap_chain_image_format = surface_format.format;
+  g_engine.swap_chain_extent       = extent;
+
+  moss__free_swap_chain_support_details (&swap_chain_support);
+
+  return VK_SUCCESS;
+}
+
+static VkResult moss__create_image_views (void)
+{
+  g_engine.swap_chain_image_views =
+    malloc (g_engine.swap_chain_image_count * sizeof (VkImageView));
+
+  for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+  {
+    const VkImageViewCreateInfo create_info = {
+      .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image    = g_engine.swap_chain_images[ i ],
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format   = g_engine.swap_chain_image_format,
+      .components =
+        {
+                     .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                     .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                     .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                     .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                     },
+      .subresourceRange = {
+                     .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                     .baseMipLevel   = 0,
+                     .levelCount     = 1,
+                     .baseArrayLayer = 0,
+                     .layerCount     = 1,
+                     },
+    };
+
+    if (vkCreateImageView (
+          g_engine.device,
+          &create_info,
+          NULL,
+          &g_engine.swap_chain_image_views[ i ]
+        ) != VK_SUCCESS)
+    {
+      moss__error ("Failed to create image view %u.\n", i);
+      for (uint32_t j = 0; j < i; ++j)
+      {
+        vkDestroyImageView (g_engine.device, g_engine.swap_chain_image_views[ j ], NULL);
+      }
+      free (g_engine.swap_chain_image_views);
+      g_engine.swap_chain_image_views = NULL;
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
+  }
+
+  return VK_SUCCESS;
+}
+
+static VkResult moss__create_render_pass (void)
+{
+  const VkAttachmentDescription color_attachment = {
+    .format         = g_engine.swap_chain_image_format,
+    .samples        = VK_SAMPLE_COUNT_1_BIT,
+    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+    .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  };
+
+  const VkAttachmentReference color_attachment_ref = {
+    .attachment = 0,
+    .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  };
+
+  const VkSubpassDescription subpass = {
+    .pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS,
+    .colorAttachmentCount = 1,
+    .pColorAttachments    = &color_attachment_ref,
+  };
+
+  const VkSubpassDependency dependency = {
+    .srcSubpass    = VK_SUBPASS_EXTERNAL,
+    .dstSubpass    = 0,
+    .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .srcAccessMask = 0,
+    .dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+  };
+
+  const VkRenderPassCreateInfo render_pass_info = {
+    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+    .attachmentCount = 1,
+    .pAttachments    = &color_attachment,
+    .subpassCount    = 1,
+    .pSubpasses      = &subpass,
+    .dependencyCount = 1,
+    .pDependencies   = &dependency,
+  };
+
+  const VkResult result =
+    vkCreateRenderPass (g_engine.device, &render_pass_info, NULL, &g_engine.render_pass);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create render pass. Error code: %d.\n", result);
+  }
+
+  return result;
+}
+
+static VkResult moss__create_graphics_pipeline (void)
+{
+  VkShaderModule vert_shader_module;
+  VkShaderModule frag_shader_module;
+
+  if (moss__create_shader_module (
+        g_engine.device,
+        moss__vert_shader_spv,
+        moss__vert_shader_spv_size,
+        &vert_shader_module
+      ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  if (moss__create_shader_module (
+        g_engine.device,
+        moss__frag_shader_spv,
+        moss__frag_shader_spv_size,
+        &frag_shader_module
+      ) != VK_SUCCESS)
+  {
+    vkDestroyShaderModule (g_engine.device, vert_shader_module, NULL);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  const VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
+    .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+    .stage  = VK_SHADER_STAGE_VERTEX_BIT,
+    .module = vert_shader_module,
+    .pName  = "main",
+  };
+
+  const VkPipelineShaderStageCreateInfo frag_shader_stage_info = {
+    .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+    .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
+    .module = frag_shader_module,
+    .pName  = "main",
+  };
+
+  const VkPipelineShaderStageCreateInfo shader_stages[] = {
+    vert_shader_stage_info,
+    frag_shader_stage_info
+  };
+
+  const VkPipelineVertexInputStateCreateInfo vertex_input_info = {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .vertexBindingDescriptionCount   = 0,
+    .pVertexBindingDescriptions      = NULL,
+    .vertexAttributeDescriptionCount = 0,
+    .pVertexAttributeDescriptions    = NULL,
+  };
+
+  const VkPipelineInputAssemblyStateCreateInfo input_assembly = {
+    .sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    .primitiveRestartEnable = VK_FALSE,
+  };
+
+  const VkViewport viewport = {
+    .x        = 0.0F,
+    .y        = 0.0F,
+    .width    = (float)g_engine.swap_chain_extent.width,
+    .height   = (float)g_engine.swap_chain_extent.height,
+    .minDepth = 0.0F,
+    .maxDepth = 1.0F,
+  };
+
+  const VkRect2D scissor = {
+    .offset = {0, 0},
+    .extent = g_engine.swap_chain_extent,
+  };
+
+  const VkPipelineViewportStateCreateInfo viewport_state = {
+    .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .viewportCount = 1,
+    .pViewports    = &viewport,
+    .scissorCount  = 1,
+    .pScissors     = &scissor,
+  };
+
+  const VkPipelineRasterizationStateCreateInfo rasterizer = {
+    .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .depthClampEnable        = VK_FALSE,
+    .rasterizerDiscardEnable = VK_FALSE,
+    .polygonMode             = VK_POLYGON_MODE_FILL,
+    .lineWidth               = 1.0F,
+    .cullMode                = VK_CULL_MODE_BACK_BIT,
+    .frontFace               = VK_FRONT_FACE_CLOCKWISE,
+    .depthBiasEnable         = VK_FALSE,
+  };
+
+  const VkPipelineMultisampleStateCreateInfo multisampling = {
+    .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .sampleShadingEnable  = VK_FALSE,
+    .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+  };
+
+  const VkPipelineColorBlendAttachmentState color_blend_attachment = {
+    .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    .blendEnable = VK_FALSE,
+  };
+
+  const VkPipelineColorBlendStateCreateInfo color_blending = {
+    .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .logicOpEnable   = VK_FALSE,
+    .attachmentCount = 1,
+    .pAttachments    = &color_blend_attachment,
+  };
+
+  const VkPipelineLayoutCreateInfo pipeline_layout_info = {
+    .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    .setLayoutCount         = 0,
+    .pSetLayouts            = NULL,
+    .pushConstantRangeCount = 0,
+    .pPushConstantRanges    = NULL,
+  };
+
+  if (vkCreatePipelineLayout (
+        g_engine.device,
+        &pipeline_layout_info,
+        NULL,
+        &g_engine.pipeline_layout
+      ) != VK_SUCCESS)
+  {
+    moss__error ("Failed to create pipeline layout.\n");
+    vkDestroyShaderModule (g_engine.device, frag_shader_module, NULL);
+    vkDestroyShaderModule (g_engine.device, vert_shader_module, NULL);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  const VkGraphicsPipelineCreateInfo pipeline_info = {
+    .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .stageCount          = 2,
+    .pStages             = shader_stages,
+    .pVertexInputState   = &vertex_input_info,
+    .pInputAssemblyState = &input_assembly,
+    .pViewportState      = &viewport_state,
+    .pRasterizationState = &rasterizer,
+    .pMultisampleState   = &multisampling,
+    .pColorBlendState    = &color_blending,
+    .layout              = g_engine.pipeline_layout,
+    .renderPass          = g_engine.render_pass,
+    .subpass             = 0,
+    .basePipelineHandle  = VK_NULL_HANDLE,
+    .basePipelineIndex   = -1,
+  };
+
+  const VkResult result = vkCreateGraphicsPipelines (
+    g_engine.device,
+    VK_NULL_HANDLE,
+    1,
+    &pipeline_info,
+    NULL,
+    &g_engine.graphics_pipeline
+  );
+
+  vkDestroyShaderModule (g_engine.device, frag_shader_module, NULL);
+  vkDestroyShaderModule (g_engine.device, vert_shader_module, NULL);
+
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create graphics pipeline. Error code: %d.\n", result);
+    vkDestroyPipelineLayout (g_engine.device, g_engine.pipeline_layout, NULL);
+    return result;
+  }
+
+  return VK_SUCCESS;
+}
+
+static VkResult moss__create_framebuffers (void)
+{
+  g_engine.swap_chain_framebuffers =
+    malloc (g_engine.swap_chain_image_count * sizeof (VkFramebuffer));
+
+  for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+  {
+    const VkImageView attachments[] = {g_engine.swap_chain_image_views[ i ]};
+
+    const VkFramebufferCreateInfo framebuffer_info = {
+      .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass      = g_engine.render_pass,
+      .attachmentCount = 1,
+      .pAttachments    = attachments,
+      .width           = g_engine.swap_chain_extent.width,
+      .height          = g_engine.swap_chain_extent.height,
+      .layers          = 1,
+    };
+
+    if (vkCreateFramebuffer (
+          g_engine.device,
+          &framebuffer_info,
+          NULL,
+          &g_engine.swap_chain_framebuffers[ i ]
+        ) != VK_SUCCESS)
+    {
+      moss__error ("Failed to create framebuffer %u.\n", i);
+      for (uint32_t j = 0; j < i; ++j)
+      {
+        vkDestroyFramebuffer (
+          g_engine.device,
+          g_engine.swap_chain_framebuffers[ j ],
+          NULL
+        );
+      }
+      free (g_engine.swap_chain_framebuffers);
+      g_engine.swap_chain_framebuffers = NULL;
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
+  }
+
+  return VK_SUCCESS;
+}
+
+static VkResult moss__create_command_pool (void)
+{
+  const VkCommandPoolCreateInfo pool_info = {
+    .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+    .queueFamilyIndex = g_engine.queue_family_indices.graphics_family,
+  };
+
+  const VkResult result =
+    vkCreateCommandPool (g_engine.device, &pool_info, NULL, &g_engine.command_pool);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create command pool. Error code: %d.\n", result);
+  }
+
+  return result;
+}
+
+static VkResult moss__create_command_buffers (void)
+{
+  g_engine.command_buffers = malloc (MAX_FRAMES_IN_FLIGHT * sizeof (VkCommandBuffer));
+
+  const VkCommandBufferAllocateInfo alloc_info = {
+    .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+    .commandPool        = g_engine.command_pool,
+    .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
+  };
+
+  const VkResult result =
+    vkAllocateCommandBuffers (g_engine.device, &alloc_info, g_engine.command_buffers);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to allocate command buffers. Error code: %d.\n", result);
+    free (g_engine.command_buffers);
+    g_engine.command_buffers = NULL;
+    return result;
+  }
+
+  return VK_SUCCESS;
+}
+
+static void
+moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_index)
+{
+  const VkCommandBufferBeginInfo begin_info = {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+  };
+
+  if (vkBeginCommandBuffer (command_buffer, &begin_info) != VK_SUCCESS)
+  {
+    moss__error ("Failed to begin recording command buffer.\n");
+    return;
+  }
+
+  const VkRenderPassBeginInfo render_pass_info = {
+    .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+    .renderPass  = g_engine.render_pass,
+    .framebuffer = g_engine.swap_chain_framebuffers[ image_index ],
+    .renderArea =
+      {
+                   .offset = {0, 0},
+                   .extent = g_engine.swap_chain_extent,
+                   },
+    .clearValueCount = 1,
+    .pClearValues    = (const VkClearValue[]) {
+                   {.color = {{0.0F, 0.0F, 0.0F, 1.0F}}},
+                   },
+  };
+
+  vkCmdBeginRenderPass (command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+  vkCmdBindPipeline (
+    command_buffer,
+    VK_PIPELINE_BIND_POINT_GRAPHICS,
+    g_engine.graphics_pipeline
+  );
+
+  vkCmdDraw (command_buffer, 3, 1, 0, 0);
+
+  vkCmdEndRenderPass (command_buffer);
+
+  if (vkEndCommandBuffer (command_buffer) != VK_SUCCESS)
+  {
+    moss__error ("Failed to record command buffer.\n");
+  }
+}
+
+static void moss__cleanup_swap_chain (void)
+{
+  if (g_engine.device == VK_NULL_HANDLE) { return; }
+
+  if (g_engine.swap_chain_framebuffers != NULL)
+  {
+    for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+    {
+      vkDestroyFramebuffer (g_engine.device, g_engine.swap_chain_framebuffers[ i ], NULL);
+    }
+    free (g_engine.swap_chain_framebuffers);
+    g_engine.swap_chain_framebuffers = NULL;
+  }
+
+  if (g_engine.swap_chain_image_views != NULL)
+  {
+    for (uint32_t i = 0; i < g_engine.swap_chain_image_count; ++i)
+    {
+      vkDestroyImageView (g_engine.device, g_engine.swap_chain_image_views[ i ], NULL);
+    }
+    free (g_engine.swap_chain_image_views);
+    g_engine.swap_chain_image_views = NULL;
+  }
+
+  if (g_engine.swap_chain_images != NULL)
+  {
+    free (g_engine.swap_chain_images);
+    g_engine.swap_chain_images = NULL;
+  }
+
+  if (g_engine.swap_chain != VK_NULL_HANDLE)
+  {
+    vkDestroySwapchainKHR (g_engine.device, g_engine.swap_chain, NULL);
+    g_engine.swap_chain = VK_NULL_HANDLE;
+  }
+}
+
+static VkResult moss__recreate_swap_chain (uint32_t width, uint32_t height)
+{
+  if (g_engine.device == VK_NULL_HANDLE) { return VK_ERROR_INITIALIZATION_FAILED; }
+
+  vkDeviceWaitIdle (g_engine.device);
+
+  moss__cleanup_swap_chain ( );
+
+  if (moss__create_swap_chain (width, height) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  if (moss__create_image_views ( ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  if (moss__create_framebuffers ( ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+/*
+  @brief Creates image available semaphores.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_image_available_semaphores (void)
+{
+  if (g_engine.device == VK_NULL_HANDLE) { return VK_ERROR_INITIALIZATION_FAILED; }
+
+  const VkSemaphoreCreateInfo semaphore_info = {
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+  };
+
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+  {
+    const VkResult result = vkCreateSemaphore (
+      g_engine.device,
+      &semaphore_info,
+      NULL,
+      &g_engine.image_available_semaphores[ i ]
+    );
+    if (result == VK_SUCCESS) { continue; }
+
+    moss__error ("Failed to create image available semaphore for frame %u.\n", i);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+/*
+  @brief Creates render finished semaphores.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_render_finished_semaphores (void)
+{
+  if (g_engine.device == VK_NULL_HANDLE) { return VK_ERROR_INITIALIZATION_FAILED; }
+
+  const VkSemaphoreCreateInfo semaphore_info = {
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+  };
+
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+  {
+    const VkResult result = vkCreateSemaphore (
+      g_engine.device,
+      &semaphore_info,
+      NULL,
+      &g_engine.render_finished_semaphores[ i ]
+    );
+    if (result == VK_SUCCESS) { continue; }
+
+    moss__error ("Failed to create render finished semaphore for frame %u.\n", i);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+/*
+  @brief Creates in-flight fences.
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_in_flight_fences (void)
+{
+  if (g_engine.device == VK_NULL_HANDLE) { return VK_ERROR_INITIALIZATION_FAILED; }
+
+  const VkFenceCreateInfo fence_info = {
+    .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+    .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+  };
+
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+  {
+    const VkResult result =
+      vkCreateFence (g_engine.device, &fence_info, NULL, &g_engine.in_flight_fences[ i ]);
+    if (result == VK_SUCCESS) { continue; }
+
+    moss__error ("Failed to create in-flight fence for frame %u.\n", i);
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+/*
+  @brief Creates synchronization objects (semaphores and fences).
+  @return Returns VK_SUCCESS on success, error code otherwise.
+*/
+static VkResult moss__create_synchronization_objects (void)
+{
+  if (moss__create_image_available_semaphores ( ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  if (moss__create_render_finished_semaphores ( ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  if (moss__create_in_flight_fences ( ) != VK_SUCCESS)
+  {
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  return VK_SUCCESS;
+}
+
+/*
+  @brief Cleans up semaphores array.
+  @param semaphores Array of semaphores to clean up.
+*/
+static void moss__cleanup_semaphores (VkSemaphore *semaphores)
+{
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+  {
+    if (semaphores[ i ] == VK_NULL_HANDLE) { continue; }
+
+    vkDestroySemaphore (g_engine.device, semaphores[ i ], NULL);
+    semaphores[ i ] = VK_NULL_HANDLE;
+  }
+}
+
+/*
+  @brief Cleans up fences array.
+  @param fences Array of fences to clean up.
+*/
+static void moss__cleanup_fences (VkFence *fences)
+{
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+  {
+    if (fences[ i ] == VK_NULL_HANDLE) { continue; }
+
+    vkDestroyFence (g_engine.device, fences[ i ], NULL);
+    fences[ i ] = VK_NULL_HANDLE;
+  }
+}
+
+/*
+  @brief Cleans up image available semaphores.
+*/
+static void moss__cleanup_image_available_semaphores (void)
+{
+  moss__cleanup_semaphores (g_engine.image_available_semaphores);
+}
+
+/*
+  @brief Cleans up render finished semaphores.
+*/
+static void moss__cleanup_render_finished_semaphores (void)
+{
+  moss__cleanup_semaphores (g_engine.render_finished_semaphores);
+}
+
+/*
+  @brief Cleans up in-flight fences.
+*/
+static void moss__cleanup_in_flight_fences (void)
+{
+  moss__cleanup_fences (g_engine.in_flight_fences);
+}
+
+/*
+  @brief Cleans up synchronization objects.
+*/
+static void moss__cleanup_synchronization_objects (void)
+{
+  moss__cleanup_in_flight_fences ( );
+  moss__cleanup_render_finished_semaphores ( );
+  moss__cleanup_image_available_semaphores ( );
 }

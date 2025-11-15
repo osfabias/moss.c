@@ -75,12 +75,15 @@ include(CMakeInfo.txt)
 # Define source files for the library
 set(MOSS_SOURCE_FILES
   src/engine.c
+  src/internal/shaders.c
   # add new source files here...
 )
 
 #=============================================================================
-# SEARCH FOR PACKAGES
+# DEPENDENCIES
 #=============================================================================
+
+add_subdirectory(vendor)
 
 find_package(Vulkan REQUIRED)
 
@@ -97,7 +100,7 @@ endif()
 target_include_directories(moss PUBLIC include)
 target_include_directories(moss PRIVATE . ${Vulkan_INCLUDE_DIRS})
 
-target_link_libraries(moss PRIVATE ${Vulkan_LIBRARIES})
+target_link_libraries(moss PRIVATE ${Vulkan_LIBRARIES} stuffy)
 
 target_compile_options(moss PRIVATE ${MOSS_COMPILE_OPTIONS})
 

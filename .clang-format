@@ -23,8 +23,8 @@ AlignTrailingComments:
   Kind:           Always
   OverEmptyLines: 0
 
-AllowAllArgumentsOnNextLine: true
-AllowAllParametersOfDeclarationOnNextLine: true
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
 AllowBreakBeforeNoexceptSpecifier: Never
 AllowShortBlocksOnASingleLine: Always
 AllowShortCaseExpressionOnASingleLine: true
@@ -37,7 +37,7 @@ AllowShortLambdasOnASingleLine: All
 AllowShortLoopsOnASingleLine: true
 AlwaysBreakBeforeMultilineStrings: false
 
-BinPackArguments: true
+BinPackArguments: false
 BinPackParameters: false
 
 BitFieldColonSpacing: Both

@@ -20,21 +20,26 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "moss/apidef.h"
 #include "moss/app_info.h"
 #include "moss/result.h"
+#include "moss/window_config.h"
 
 /*
   @brief Moss engine configuration.
 */
 typedef struct
 {
-  const MossAppInfo *app_info; /* Application info. */
+  const MossAppInfo      *app_info;      /* Application info. */
+  const MossWindowConfig *window_config; /* Window configuration. */
 } MossEngineConfig;
 
 /*
   @brief Initializes graphics engine.
-  @return Returns a pointer to an engine instance on success, otherwise returns NULL.
+  @param config Engine configuration.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
 __MOSS_API__ MossResult moss_engine_init (const MossEngineConfig *config);
 
@@ -43,3 +48,16 @@ __MOSS_API__ MossResult moss_engine_init (const MossEngineConfig *config);
   @details Cleans up all reserved memory and destroys all GraphicsAPI objects.
 */
 __MOSS_API__ void moss_engine_deinit (void);
+
+/*
+  @brief Draws a frame.
+  @details Renders the current frame to the swap chain.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
+*/
+__MOSS_API__ MossResult moss_engine_draw_frame (void);
+
+/*
+  @brief Checks if the window should close.
+  @return Returns true if window should close, false otherwise.
+*/
+__MOSS_API__ bool moss_engine_should_close (void);
