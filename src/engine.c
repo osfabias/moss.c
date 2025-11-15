@@ -37,12 +37,12 @@
 #include "src/internal/app_info.h"
 #include "src/internal/log.h"
 #include "src/internal/shaders.h"
+#include "src/internal/vertex.h"
 #include "src/internal/vk_instance_utils.h"
 #include "src/internal/vk_physical_device_utils.h"
 #include "src/internal/vk_shader_utils.h"
 #include "src/internal/vk_swapchain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
-#include "vulkan/vulkan_core.h"
 
 /*=============================================================================
     ENGINE STATE
@@ -148,12 +148,12 @@ static Moss__Engine g_engine = {
 
   /* Swap chain. */
   .swapchain                   = VK_NULL_HANDLE,
-  .swapchain_images            = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
+  .swapchain_images            = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE },
   .swapchain_image_count       = 0,
   .swapchain_image_format      = 0,
-  .swapchain_extent            = (VkExtent2D) {.width = 0, .height = 0},
-  .swapchain_image_views       = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
-  .swapchain_framebuffers      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE},
+  .swapchain_extent            = (VkExtent2D) { .width = 0, .height = 0 },
+  .swapchain_image_views       = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE },
+  .swapchain_framebuffers      = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE },
   .framebuffer_resize_requsted = false,
 
   /* Render pipeline. */
@@ -163,12 +163,12 @@ static Moss__Engine g_engine = {
 
   /* Command buffers. */
   .command_pool    = VK_NULL_HANDLE,
-  .command_buffers = {VK_NULL_HANDLE, VK_NULL_HANDLE},
+  .command_buffers = { VK_NULL_HANDLE, VK_NULL_HANDLE },
 
   /* Synchronization objects. */
-  .image_available_semaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE},
-  .render_finished_semaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE},
-  .in_flight_fences           = {VK_NULL_HANDLE, VK_NULL_HANDLE},
+  .image_available_semaphores = { VK_NULL_HANDLE, VK_NULL_HANDLE },
+  .render_finished_semaphores = { VK_NULL_HANDLE, VK_NULL_HANDLE },
+  .in_flight_fences           = { VK_NULL_HANDLE, VK_NULL_HANDLE },
 
   /* Frame state. */
   .current_frame = 0,
@@ -253,6 +253,13 @@ inline static MossResult moss__create_image_views (void);
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
 inline static MossResult moss__create_render_pass (void);
+
+/*
+  @brief Returns Vulkan pipeline vertex input state info.
+  @return Vulkan pipeline vertex input state info.
+*/
+inline static VkPipelineVertexInputStateCreateInfo
+moss__create_vk_pipeline_vertex_input_state_info (void);
 
 /*
   @brief Creates graphics pipeline.
@@ -620,11 +627,11 @@ MossResult moss_engine_draw_frame (void)
   vkResetCommandBuffer (command_buffer, 0);
   moss__record_command_buffer (command_buffer, current_image_index);
 
-  const VkSemaphore wait_semaphores[] = {image_available_semaphore};
+  const VkSemaphore wait_semaphores[] = { image_available_semaphore };
   const size_t      wait_semaphore_count =
     sizeof (wait_semaphores) / sizeof (wait_semaphores[ 0 ]);
 
-  const VkSemaphore signal_semaphores[] = {render_finished_semaphore};
+  const VkSemaphore signal_semaphores[] = { render_finished_semaphore };
   const size_t      signal_semaphore_count =
     sizeof (signal_semaphores) / sizeof (signal_semaphores[ 0 ]);
 
@@ -633,7 +640,7 @@ MossResult moss_engine_draw_frame (void)
     .waitSemaphoreCount = wait_semaphore_count,
     .pWaitSemaphores    = wait_semaphores,
     .pWaitDstStageMask =
-      (const VkPipelineStageFlags[]) {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT},
+      (const VkPipelineStageFlags[]) { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT },
     .commandBufferCount   = 1,
     .pCommandBuffers      = &command_buffer,
     .signalSemaphoreCount = signal_semaphore_count,
@@ -851,7 +858,7 @@ inline static MossResult moss__create_logical_device (void)
     queue_create_infos[ queue_create_info_count++ ] = present_queue_create_info;
   }
 
-  VkPhysicalDeviceFeatures device_features = {0};
+  VkPhysicalDeviceFeatures device_features = { 0 };
 
   const VkDeviceCreateInfo create_info = {
     .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -1060,6 +1067,26 @@ inline static MossResult moss__create_render_pass (void)
   return MOSS_RESULT_SUCCESS;
 }
 
+inline static VkPipelineVertexInputStateCreateInfo
+moss__create_vk_pipeline_vertex_input_state_info (void)
+{
+  const Moss__VkVertexInputBindingDescriptionPack binding_descriptions_pack =
+    moss__get_vk_vertex_input_binding_description ( );
+
+  const Moss__VkVertexInputAttributeDescriptionPack attribute_descriptions_pack =
+    moss__get_vk_vertex_input_attribute_description ( );
+
+  const VkPipelineVertexInputStateCreateInfo info = {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .vertexBindingDescriptionCount   = binding_descriptions_pack.count,
+    .pVertexBindingDescriptions      = binding_descriptions_pack.descriptions,
+    .vertexAttributeDescriptionCount = attribute_descriptions_pack.count,
+    .pVertexAttributeDescriptions    = attribute_descriptions_pack.descriptions,
+  };
+
+  return info;
+}
+
 inline static MossResult moss__create_graphics_pipeline (void)
 {
   VkShaderModule vert_shader_module;
@@ -1098,18 +1125,11 @@ inline static MossResult moss__create_graphics_pipeline (void)
     .pName  = "main",
   };
 
-  const VkPipelineShaderStageCreateInfo shader_stages[] = {
-    vert_shader_stage_info,
-    frag_shader_stage_info
-  };
+  const VkPipelineShaderStageCreateInfo shader_stages[] = { vert_shader_stage_info,
+                                                            frag_shader_stage_info };
 
-  const VkPipelineVertexInputStateCreateInfo vertex_input_info = {
-    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-    .vertexBindingDescriptionCount   = 0,
-    .pVertexBindingDescriptions      = NULL,
-    .vertexAttributeDescriptionCount = 0,
-    .pVertexAttributeDescriptions    = NULL,
-  };
+  const VkPipelineVertexInputStateCreateInfo vertex_input_info =
+    moss__create_vk_pipeline_vertex_input_state_info ( );
 
   const VkPipelineInputAssemblyStateCreateInfo input_assembly = {
     .sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1231,7 +1251,7 @@ inline static MossResult moss__create_framebuffers (void)
 {
   for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
   {
-    const VkImageView attachments[] = {g_engine.swapchain_image_views[ i ]};
+    const VkImageView attachments[] = { g_engine.swapchain_image_views[ i ] };
 
     const VkFramebufferCreateInfo framebuffer_info = {
       .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -1351,7 +1371,7 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
   };
 
   const VkRect2D scissor = {
-    .offset = {0, 0},
+    .offset = { 0, 0 },
     .extent = g_engine.swapchain_extent,
   };
 
@@ -1407,7 +1427,7 @@ inline static void moss__cleanup_swapchain (void)
 
   g_engine.swapchain_image_count  = 0;
   g_engine.swapchain_image_format = 0;
-  g_engine.swapchain_extent       = (VkExtent2D) {.width = 0, .height = 0};
+  g_engine.swapchain_extent       = (VkExtent2D) { .width = 0, .height = 0 };
 }
 
 inline static void moss__wait_while_window_is_minimized (void)
