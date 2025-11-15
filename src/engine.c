@@ -155,8 +155,10 @@ static Moss__Engine g_engine = {
 
 /*
   @brief Callback for window resize event.
-  @note Satisfies @ref
+  @note Satisfies @ref StuffyWindowResizeCallback signature.
 */
+static void
+moss__window_resize_callback (StuffyWindow *window, uint32_t width, uint32_t height);
 
 /*=============================================================================
     INTERNAL FUNCTION DECLARATIONS
@@ -636,6 +638,23 @@ MossResult moss_engine_draw_frame (void)
 }
 
 /*=============================================================================
+    INTERNAL CALLBACK FUNCTIONS IMPLENTATION
+  =============================================================================*/
+
+static void moss__window_resize_callback (
+  StuffyWindow *const window,
+  const uint32_t      width,
+  const uint32_t      height
+)
+{
+  (void)(window);
+  (void)(width);
+  (void)(height);
+
+  g_engine.framebuffer_resize_requsted = true;
+}
+
+/*=============================================================================
     INTERNAL FUNCTIONS IMPLEMENTATION
   =============================================================================*/
 
@@ -737,6 +756,8 @@ inline static MossResult moss__open_window (const MossWindowConfig *window_confi
     moss__error ("Failed to create window.\n");
     return MOSS_RESULT_ERROR;
   }
+
+  stuffy_window_set_resize_callback (g_engine.window, moss__window_resize_callback);
 
   return MOSS_RESULT_SUCCESS;
 }
