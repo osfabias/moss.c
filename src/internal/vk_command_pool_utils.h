@@ -27,8 +27,16 @@
 #include "moss/result.h"
 #include "src/internal/log.h"
 
+/*
+  @brief Creates Vulkan command pool.
+  @param device Logical device to create command pool on.
+  @param queue_family_index Queue family index to assign coomand pool to.
+  @param out_command_pool Output variable that created command poll handle will be written
+  to.
+  @return MOSS_RESULT_SUCCESS on success, otherwise MOSS_RESULT_ERROR.
+*/
 inline static MossResult moss__create_command_pool (
-  VkDevice             device,
+  const VkDevice       device,
   const uint32_t       queue_family_index,
   VkCommandPool *const out_command_pool
 )

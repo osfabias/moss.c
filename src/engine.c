@@ -37,6 +37,7 @@
 #include "moss/window_config.h"
 
 #include "src/internal/app_info.h"
+#include "src/internal/crate.h"
 #include "src/internal/log.h"
 #include "src/internal/memory_utils.h"
 #include "src/internal/shaders.h"
@@ -126,11 +127,7 @@ typedef struct
 
   /* === Vertex buffers === */
   /* Vertex buffer. */
-  VkBuffer vertex_buffer;
-  /* Vertex buffer memory. */
-  VkDeviceMemory vertex_buffer_memory;
-  /* Vertex buffer size. */
-  size_t vertex_buffer_size;
+  Moss__Crate vertex_crate;
 
   /* === Command buffers === */
   /* General command pool. */
@@ -195,9 +192,7 @@ static Moss__Engine g_engine = {
   .graphics_pipeline = VK_NULL_HANDLE,
 
   /* Vertex buffers. */
-  .vertex_buffer        = VK_NULL_HANDLE,
-  .vertex_buffer_memory = VK_NULL_HANDLE,
-  .vertex_buffer_size   = 0,
+  .vertex_crate = {0},
 
   /* Command buffers. */
   .general_command_pool    = VK_NULL_HANDLE,
@@ -315,18 +310,7 @@ inline static MossResult moss__create_framebuffers (void);
   @brief Creates vertex buffer.
   @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
 */
-inline static MossResult moss__create_vertex_buffer (void);
-
-/*
-  @brief Allocates memory for the vertex buffer.
-  @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
-*/
-inline static MossResult moss__allocate_vertex_buffer_memory (void);
-
-/*
-  @brief Fills vertex buffer with g_verticies.
-*/
-inline static void moss__fill_vertex_buffer (void);
+inline static MossResult moss__create_vertex_crate (void);
 
 /*
   @brief Creates command buffers.
@@ -557,26 +541,17 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     return MOSS_RESULT_ERROR;
   }
 
-  if (moss__create_vertex_buffer ( ) != MOSS_RESULT_SUCCESS)
+  if (moss__create_vertex_crate ( ) != MOSS_RESULT_SUCCESS)
   {
     moss_engine_deinit ( );
     return MOSS_RESULT_ERROR;
   }
 
-  if (moss__allocate_vertex_buffer_memory ( ) != MOSS_RESULT_SUCCESS)
-  {
-    moss_engine_deinit ( );
-    return MOSS_RESULT_ERROR;
-  }
-
-  vkBindBufferMemory (
-    g_engine.device,
-    g_engine.vertex_buffer,
-    g_engine.vertex_buffer_memory,
-    0
+  moss__fill_crate (
+    &g_engine.vertex_crate,
+    (void *)g_verticies,
+    sizeof (g_verticies)
   );
-
-  moss__fill_vertex_buffer ( );
 
   if (moss__create_general_command_buffers ( ) != MOSS_RESULT_SUCCESS)
   {
@@ -620,18 +595,7 @@ void moss_engine_deinit (void)
       g_engine.general_command_pool = VK_NULL_HANDLE;
     }
 
-    if (g_engine.vertex_buffer_memory != VK_NULL_HANDLE)
-    {
-      vkFreeMemory (g_engine.device, g_engine.vertex_buffer_memory, NULL);
-      g_engine.vertex_buffer_memory = VK_NULL_HANDLE;
-      g_engine.vertex_buffer_size   = 0;
-    }
-
-    if (g_engine.vertex_buffer != VK_NULL_HANDLE)
-    {
-      vkDestroyBuffer (g_engine.device, g_engine.vertex_buffer, NULL);
-      g_engine.vertex_buffer = VK_NULL_HANDLE;
-    }
+    moss__free_crate (&g_engine.vertex_crate);
 
     if (g_engine.graphics_pipeline != VK_NULL_HANDLE)
     {
@@ -1419,7 +1383,7 @@ inline static MossResult moss__create_framebuffers (void)
   return MOSS_RESULT_SUCCESS;
 }
 
-inline static MossResult moss__create_vertex_buffer (void)
+inline static MossResult moss__create_vertex_crate (void)
 {
   const bool graphics_and_transfer_family_are_same =
     g_engine.queue_family_indices.graphics_family ==
@@ -1430,98 +1394,38 @@ inline static MossResult moss__create_vertex_buffer (void)
     g_engine.queue_family_indices.transfer_family,
   };
 
-  VkBufferCreateInfo create_info = {
-    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+  Moss__CrateCreateInfo create_info = {
     .size  = sizeof (g_verticies),
     .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    .memory_properties =
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
   };
 
   if (graphics_and_transfer_family_are_same)
   {
-    create_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
-    create_info.queueFamilyIndexCount = 0;
+    create_info.sharing_mode                    = VK_SHARING_MODE_EXCLUSIVE;
+    create_info.shared_queue_family_index_count = 0;
   }
   else {
-    create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-    create_info.queueFamilyIndexCount =
+    create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+    create_info.shared_queue_family_index_count =
       sizeof (shared_queue_family_indices) / sizeof (shared_queue_family_indices[ 0 ]);
-    create_info.pQueueFamilyIndices = shared_queue_family_indices;
+    create_info.shared_queue_family_indices = shared_queue_family_indices;
   }
 
-  const VkResult result =
-    vkCreateBuffer (g_engine.device, &create_info, NULL, &g_engine.vertex_buffer);
-  if (result != VK_SUCCESS)
-  {
-    moss__error ("Failed to create vertex buffer: %d.", result);
-    return MOSS_RESULT_ERROR;
-  }
-
-  return MOSS_RESULT_SUCCESS;
-}
-
-inline static MossResult moss__allocate_vertex_buffer_memory (void)
-{
-  // Get memory requirement
-  VkMemoryRequirements memory_requirements;
-  vkGetBufferMemoryRequirements (
+  const MossResult result = moss__create_crate (
+    g_engine.physical_device,
     g_engine.device,
-    g_engine.vertex_buffer,
-    &memory_requirements
+    &create_info,
+    &g_engine.vertex_crate
   );
 
-  // Search for suitable memory type
-  uint32_t memory_type_index;
+  if (result != MOSS_RESULT_SUCCESS)
   {
-    MossResult result = moss__select_suitable_memory_type (
-      g_engine.physical_device,
-      memory_requirements.memoryTypeBits,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      &memory_type_index
-    );
-    if (result != MOSS_RESULT_SUCCESS)
-    {
-      moss__error (
-        "Failed to find suitable memory type for to allocate memory for vertex buffer.\n"
-      );
-      return MOSS_RESULT_ERROR;
-    }
+    moss__error ("Failed to create vertex crate.\n");
   }
 
-  // Save buffer size
-  g_engine.vertex_buffer_size = memory_requirements.size;
-
-  // Allocate memory
-  const VkMemoryAllocateInfo alloc_info = {
-    .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-    .allocationSize  = memory_requirements.size,
-    .memoryTypeIndex = memory_type_index,
-  };
-  const VkResult result =
-    vkAllocateMemory (g_engine.device, &alloc_info, NULL, &g_engine.vertex_buffer_memory);
-  if (result != VK_SUCCESS)
-  {
-    moss__error ("Failed to allocate memory for vertex buffer: %d.", result);
-    return MOSS_RESULT_ERROR;
-  }
-
-  return MOSS_RESULT_SUCCESS;
-}
-
-inline static void moss__fill_vertex_buffer (void)
-{
-  void *mapped_memory;
-  vkMapMemory (
-    g_engine.device,
-    g_engine.vertex_buffer_memory,
-    0,
-    g_engine.vertex_buffer_size,
-    0,
-    &mapped_memory
-  );
-
-  memcpy (mapped_memory, g_verticies, sizeof (g_verticies));
-
-  vkUnmapMemory (g_engine.device, g_engine.vertex_buffer_memory);
+  return result;
 }
 
 inline static MossResult moss__create_general_command_buffers (void)
@@ -1597,7 +1501,7 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
     .extent = g_engine.swapchain_extent,
   };
 
-  const VkBuffer     vertex_buffers[]        = { g_engine.vertex_buffer };
+  const VkBuffer     vertex_buffers[]        = { g_engine.vertex_crate.buffer };
   const VkDeviceSize vertex_buffer_offsets[] = { 0 };
 
   vkCmdSetViewport (command_buffer, 0, 1, &viewport);
