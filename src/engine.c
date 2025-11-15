@@ -56,7 +56,7 @@
 typedef struct
 {
   /* Window. */
-  Window *window; /* Window handle. */
+  StuffyWindow *window; /* Window handle. */
 
   /* Vulkan instance and surface. */
   VkInstance   api_instance; /* Vulkan instance. */
@@ -492,7 +492,7 @@ void moss_engine_deinit (void)
 
   if (g_engine.window != NULL)
   {
-    close_window (g_engine.window);
+    stuffy_window_close (g_engine.window);
     g_engine.window = NULL;
   }
 
@@ -508,8 +508,8 @@ void moss_engine_deinit (void)
 bool moss_engine_should_close (void)
 {
   if (g_engine.window == NULL) { return true; }
-  update_app ( );
-  return should_window_close (g_engine.window);
+  stuffy_app_update ( );
+  return stuffy_window_should_close (g_engine.window);
 }
 
 /*
@@ -542,7 +542,7 @@ MossResult moss_engine_draw_frame (void)
   if (result == VK_ERROR_OUT_OF_DATE_KHR)
   {
     // Swap chain is out of date, need to recreate before we can acquire image
-    const WindowRect window_rect = get_window_rect (g_engine.window);
+    const StuffyWindowRect window_rect = stuffy_window_get_rect (g_engine.window);
     return moss__recreate_swap_chain (window_rect.width, window_rect.height);
   }
 
@@ -596,7 +596,7 @@ MossResult moss_engine_draw_frame (void)
   if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
   {
     // Swap chain is out of date or suboptimal, need to recreate
-    const WindowRect window_rect = get_window_rect (g_engine.window);
+    const StuffyWindowRect window_rect = stuffy_window_get_rect (g_engine.window);
     if (moss__recreate_swap_chain (window_rect.width, window_rect.height) !=
         MOSS_RESULT_SUCCESS)
     {
@@ -675,16 +675,20 @@ static MossResult moss__create_api_instance (const MossAppInfo *const app_info)
 
 static MossResult moss__init_stuffy_app (void)
 {
-  init_app ( );
+  if (stuffy_app_init ( ) != 0)
+  {
+    moss__error ("Failed to initialize stuffy app.\n");
+    return MOSS_RESULT_ERROR;
+  }
   return MOSS_RESULT_SUCCESS;
 }
 
-static void moss__deinit_stuffy_app (void) { deinit_app ( ); }
+static void moss__deinit_stuffy_app (void) { stuffy_app_deinit ( ); }
 
 static MossResult
 moss__create_window (const MossWindowConfig *window_config, const char *app_name)
 {
-  const WindowConf stuffy_window_config = {
+  const StuffyWindowConfig stuffy_window_config = {
     .rect =
       {
              .x      = 128,
@@ -693,11 +697,11 @@ moss__create_window (const MossWindowConfig *window_config, const char *app_name
              .height = window_config->height,
              },
     .title      = app_name,
-    .style_mask = WINDOW_STYLE_TITLED_BIT | WINDOW_STYLE_CLOSABLE_BIT |
-                  WINDOW_STYLE_RESIZABLE_BIT | WINDOW_STYLE_ICONIFIABLE_BIT,
+    .style_mask = STUFFY_WINDOW_STYLE_TITLED_BIT | STUFFY_WINDOW_STYLE_CLOSABLE_BIT |
+                  STUFFY_WINDOW_STYLE_RESIZABLE_BIT | STUFFY_WINDOW_STYLE_ICONIFIABLE_BIT,
   };
 
-  g_engine.window = open_window (&stuffy_window_config);
+  g_engine.window = stuffy_window_open (&stuffy_window_config);
   if (g_engine.window == NULL)
   {
     moss__error ("Failed to create window.\n");
@@ -709,13 +713,13 @@ moss__create_window (const MossWindowConfig *window_config, const char *app_name
 
 static MossResult moss__create_surface (void)
 {
-  const VkSurfaceCreateInfo create_info = {
+  const StuffyVkSurfaceCreateInfo create_info = {
     .window    = g_engine.window,
     .instance  = g_engine.api_instance,
     .allocator = NULL,
   };
 
-  const VkResult result = create_vk_surface (&create_info, &g_engine.surface);
+  const VkResult result = stuffy_vk_create_surface (&create_info, &g_engine.surface);
   if (result != VK_SUCCESS)
   {
     moss__error ("Failed to create window surface. Error code: %d.\n", result);
