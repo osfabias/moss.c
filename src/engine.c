@@ -633,7 +633,7 @@ MossResult moss_engine_draw_frame (void)
     .pWaitSemaphores    = signal_semaphores,
     .swapchainCount     = 1,
     .pSwapchains        = &g_engine.swapchain,
-    .pImageIndices      = &g_engine.current_frame,
+    .pImageIndices      = &current_image_index,
   };
 
   result = vkQueuePresentKHR (g_engine.present_queue, &present_info);
