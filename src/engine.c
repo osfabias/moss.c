@@ -876,7 +876,7 @@ inline static MossResult moss__create_logical_device (void)
 inline static MossResult
 moss__create_swapchain (const uint32_t width, const uint32_t height)
 {
-  Moss__SwapChainSupportDetails swapchain_support =
+  const Moss__SwapChainSupportDetails swapchain_support =
     moss__query_swapchain_support (g_engine.physical_device, g_engine.surface);
 
   const VkSurfaceFormatKHR surface_format = moss__choose_swap_surface_format (
@@ -929,7 +929,6 @@ moss__create_swapchain (const uint32_t width, const uint32_t height)
   if (result != VK_SUCCESS)
   {
     moss__error ("Failed to create swap chain. Error code: %d.\n", result);
-    moss__free_swapchain_support_details (&swapchain_support);
     return MOSS_RESULT_ERROR;
   }
 
@@ -940,14 +939,13 @@ moss__create_swapchain (const uint32_t width, const uint32_t height)
     NULL
   );
 
-  if (g_engine.swapchain_image_count <= MAX_SWAPCHAIN_IMAGE_COUNT)
+  if (g_engine.swapchain_image_count > MAX_SWAPCHAIN_IMAGE_COUNT)
   {
     moss__error (
       "Real swapchain image count is bigger than expected. (%d > %d)",
       g_engine.swapchain_image_count,
       MAX_SWAPCHAIN_IMAGE_COUNT
     );
-    moss__free_swapchain_support_details (&swapchain_support);
     return MOSS_RESULT_ERROR;
   }
 
@@ -960,8 +958,6 @@ moss__create_swapchain (const uint32_t width, const uint32_t height)
 
   g_engine.swapchain_image_format = surface_format.format;
   g_engine.swapchain_extent       = extent;
-
-  moss__free_swapchain_support_details (&swapchain_support);
 
   return MOSS_RESULT_SUCCESS;
 }

@@ -26,7 +26,13 @@
 #include <vulkan/vulkan.h>
 
 #include "src/internal/log.h"
-#include "src/internal/vk_physical_device_utils.h"
+#include "vulkan/vulkan_core.h"
+
+/* Max number of available Vulkan formats. */
+#define MAX_VULKAN_FORMAT_COUNT (uint32_t)(265)
+
+/* Max number of available Vulkan present modes . */
+#define MAX_VULKAN_PRESENT_MODE_COUNT (uint32_t)(265)
 
 /*
   @brief Swap chain support details.
@@ -34,11 +40,20 @@
 */
 typedef struct
 {
-  VkSurfaceCapabilitiesKHR capabilities;       /* Surface capabilities. */
-  VkSurfaceFormatKHR      *formats;            /* Available surface formats. */
-  uint32_t                 format_count;       /* Number of formats. */
-  VkPresentModeKHR        *present_modes;      /* Available present modes. */
-  uint32_t                 present_mode_count; /* Number of present modes. */
+  /* Surface capabilities. */
+  VkSurfaceCapabilitiesKHR capabilities;
+
+  /* Available surface formats. */
+  VkSurfaceFormatKHR formats[ MAX_VULKAN_FORMAT_COUNT ];
+
+  /* Number of formats. */
+  uint32_t format_count;
+
+  /* Available present modes. */
+  VkPresentModeKHR present_modes[ MAX_VULKAN_PRESENT_MODE_COUNT ];
+
+  /* Number of present modes. */
+  uint32_t present_mode_count;
 } Moss__SwapChainSupportDetails;
 
 /*
@@ -56,14 +71,20 @@ moss__query_swapchain_support (VkPhysicalDevice device, VkSurfaceKHR surface)
 
   vkGetPhysicalDeviceSurfaceFormatsKHR (device, surface, &details.format_count, NULL);
 
-  if (details.format_count != 0)
+  if (details.format_count <= MAX_VULKAN_FORMAT_COUNT)
   {
-    details.formats = malloc (details.format_count * sizeof (VkSurfaceFormatKHR));
     vkGetPhysicalDeviceSurfaceFormatsKHR (
       device,
       surface,
       &details.format_count,
       details.formats
+    );
+  }
+  else {
+    moss__error (
+      "Format count exceeded the limit (%d > %d). No formats saved.",
+      details.format_count,
+      MAX_VULKAN_FORMAT_COUNT
     );
   }
 
@@ -74,10 +95,8 @@ moss__query_swapchain_support (VkPhysicalDevice device, VkSurfaceKHR surface)
     NULL
   );
 
-  if (details.present_mode_count != 0)
+  if (details.present_mode_count <= MAX_VULKAN_PRESENT_MODE_COUNT)
   {
-    details.present_modes =
-      malloc (details.present_mode_count * sizeof (VkPresentModeKHR));
     vkGetPhysicalDeviceSurfacePresentModesKHR (
       device,
       surface,
@@ -85,31 +104,15 @@ moss__query_swapchain_support (VkPhysicalDevice device, VkSurfaceKHR surface)
       details.present_modes
     );
   }
+  else {
+    moss__error (
+      "Present mode count exceeded the limit (%d > %d). No formats saved.",
+      details.present_mode_count,
+      MAX_VULKAN_PRESENT_MODE_COUNT
+    );
+  }
 
   return details;
-}
-
-/*
-  @brief Free swap chain support details.
-  @param details Pointer to swap chain support details to free.
-*/
-inline static void
-moss__free_swapchain_support_details (Moss__SwapChainSupportDetails *details)
-{
-  if (details->formats != NULL)
-  {
-    free (details->formats);
-    details->formats = NULL;
-  }
-
-  if (details->present_modes != NULL)
-  {
-    free (details->present_modes);
-    details->present_modes = NULL;
-  }
-
-  details->format_count       = 0;
-  details->present_mode_count = 0;
 }
 
 /*
