@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,10 +33,12 @@
 #include "moss/app_info.h"
 #include "moss/engine.h"
 #include "moss/result.h"
+#include "moss/vertex.h"
 #include "moss/window_config.h"
 
 #include "src/internal/app_info.h"
 #include "src/internal/log.h"
+#include "src/internal/memory_utils.h"
 #include "src/internal/shaders.h"
 #include "src/internal/vertex.h"
 #include "src/internal/vk_instance_utils.h"
@@ -43,6 +46,18 @@
 #include "src/internal/vk_shader_utils.h"
 #include "src/internal/vk_swapchain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
+#include "vulkan/vulkan_core.h"
+
+/*=============================================================================
+    TEMPO
+  =============================================================================*/
+
+/* Vertex array just for implementing vertex buffers. */
+static const MossVertex g_verticies[ 4 ] = {
+  { { 0.0F, -0.5F }, { 1.0F, 0.0F, 0.0F } },
+  {  { 0.5F, 0.5F }, { 0.0F, 1.0F, 0.0F } },
+  { { -0.5F, 0.5F }, { 0.0F, 0.0F, 1.0F } },
+};
 
 /*=============================================================================
     ENGINE STATE
@@ -58,17 +73,17 @@
 */
 typedef struct
 {
-  /* Window. */
+  /* === Window === */
   /* Window handle. */
   StuffyWindow *window;
 
-  /* Vulkan instance and surface. */
+  /* === Vulkan instance and surface === */
   /* Vulkan instance. */
   VkInstance api_instance;
   /* Window surface. */
   VkSurfaceKHR surface;
 
-  /* Physical and logical device. */
+  /* === Physical and logical device === */
   /* Physical device. */
   VkPhysicalDevice physical_device;
   /* Logical device. */
@@ -80,7 +95,7 @@ typedef struct
   /* Present queue. */
   VkQueue present_queue;
 
-  /* Swap chain. */
+  /* === Swap chain === */
   /* Swap chain. */
   VkSwapchainKHR swapchain;
   /* Swap chain images. */
@@ -98,7 +113,7 @@ typedef struct
   /* Flag that shows, that the framebuffer resize was requested, but not performed yet. */
   bool framebuffer_resize_requsted;
 
-  /* Render pipeline. */
+  /* === Render pipeline === */
   /* Render pass. */
   VkRenderPass render_pass;
   /* Pipeline layout. */
@@ -106,13 +121,21 @@ typedef struct
   /* Graphics pipeline. */
   VkPipeline graphics_pipeline;
 
-  /* Command buffers. */
+  /* === Vertex buffers === */
+  /* Vertex buffer. */
+  VkBuffer vertex_buffer;
+  /* Vertex buffer memory. */
+  VkDeviceMemory vertex_buffer_memory;
+  /* Vertex buffer size. */
+  size_t vertex_buffer_size;
+
+  /* === Command buffers === */
   /* Command pool. */
   VkCommandPool command_pool;
   /* Command buffers. */
   VkCommandBuffer command_buffers[ MAX_FRAMES_IN_FLIGHT ];
 
-  /* Synchronization objects. */
+  /* === Synchronization objects === */
   /* Image available semaphores. */
   VkSemaphore image_available_semaphores[ MAX_FRAMES_IN_FLIGHT ];
   /* Render finished semaphores. */
@@ -120,7 +143,7 @@ typedef struct
   /* In-flight fences. */
   VkFence in_flight_fences[ MAX_FRAMES_IN_FLIGHT ];
 
-  /* Frame state. */
+  /* === Frame state === */
   /* Current frame index. */
   uint32_t current_frame;
 } Moss__Engine;
@@ -160,6 +183,11 @@ static Moss__Engine g_engine = {
   .render_pass       = VK_NULL_HANDLE,
   .pipeline_layout   = VK_NULL_HANDLE,
   .graphics_pipeline = VK_NULL_HANDLE,
+
+  /* Vertex buffers. */
+  .vertex_buffer        = VK_NULL_HANDLE,
+  .vertex_buffer_memory = VK_NULL_HANDLE,
+  .vertex_buffer_size   = 0,
 
   /* Command buffers. */
   .command_pool    = VK_NULL_HANDLE,
@@ -278,6 +306,23 @@ inline static MossResult moss__create_framebuffers (void);
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
 inline static MossResult moss__create_command_pool (void);
+
+/*
+  @brief Creates vertex buffer.
+  @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
+*/
+inline static MossResult moss__create_vertex_buffer (void);
+
+/*
+  @brief Allocates memory for the vertex buffer.
+  @return Returns MOSS_RESULT_SUCCESS on successs, MOSS_RESULT_ERROR otherwise.
+*/
+inline static MossResult moss__allocate_vertex_buffer_memory (void);
+
+/*
+  @brief Fills vertex buffer with g_verticies.
+*/
+inline static void moss__fill_vertex_buffer (void);
 
 /*
   @brief Creates command buffers.
@@ -484,6 +529,27 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     return MOSS_RESULT_ERROR;
   }
 
+  if (moss__create_vertex_buffer ( ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  if (moss__allocate_vertex_buffer_memory ( ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
+
+  vkBindBufferMemory (
+    g_engine.device,
+    g_engine.vertex_buffer,
+    g_engine.vertex_buffer_memory,
+    0
+  );
+
+  moss__fill_vertex_buffer ( );
+
   if (moss__create_command_buffers ( ) != MOSS_RESULT_SUCCESS)
   {
     moss_engine_deinit ( );
@@ -518,6 +584,19 @@ void moss_engine_deinit (void)
     {
       vkDestroyCommandPool (g_engine.device, g_engine.command_pool, NULL);
       g_engine.command_pool = VK_NULL_HANDLE;
+    }
+
+    if (g_engine.vertex_buffer_memory != VK_NULL_HANDLE)
+    {
+      vkFreeMemory (g_engine.device, g_engine.vertex_buffer_memory, NULL);
+      g_engine.vertex_buffer_memory = VK_NULL_HANDLE;
+      g_engine.vertex_buffer_size   = 0;
+    }
+
+    if (g_engine.vertex_buffer != VK_NULL_HANDLE)
+    {
+      vkDestroyBuffer (g_engine.device, g_engine.vertex_buffer, NULL);
+      g_engine.vertex_buffer = VK_NULL_HANDLE;
     }
 
     if (g_engine.graphics_pipeline != VK_NULL_HANDLE)
@@ -1305,6 +1384,91 @@ inline static MossResult moss__create_command_pool (void)
   return MOSS_RESULT_SUCCESS;
 }
 
+inline static MossResult moss__create_vertex_buffer (void)
+{
+  const VkBufferCreateInfo create_info = {
+    .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    .size        = sizeof (g_verticies),
+    .usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  };
+
+  const VkResult result =
+    vkCreateBuffer (g_engine.device, &create_info, NULL, &g_engine.vertex_buffer);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to create vertex buffer: %d.", result);
+    return MOSS_RESULT_ERROR;
+  }
+
+  return MOSS_RESULT_SUCCESS;
+}
+
+inline static MossResult moss__allocate_vertex_buffer_memory (void)
+{
+  // Get memory requirement
+  VkMemoryRequirements memory_requirements;
+  vkGetBufferMemoryRequirements (
+    g_engine.device,
+    g_engine.vertex_buffer,
+    &memory_requirements
+  );
+
+  // Search for suitable memory type
+  uint32_t memory_type_index;
+  {
+    MossResult result = moss__select_suitable_memory_type (
+      g_engine.physical_device,
+      memory_requirements.memoryTypeBits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      &memory_type_index
+    );
+    if (result != MOSS_RESULT_SUCCESS)
+    {
+      moss__error (
+        "Failed to find suitable memory type for to allocate memory for vertex buffer.\n"
+      );
+      return MOSS_RESULT_ERROR;
+    }
+  }
+
+  // Save buffer size
+  g_engine.vertex_buffer_size = memory_requirements.size;
+
+  // Allocate memory
+  const VkMemoryAllocateInfo alloc_info = {
+    .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    .allocationSize  = memory_requirements.size,
+    .memoryTypeIndex = memory_type_index,
+  };
+  const VkResult result =
+    vkAllocateMemory (g_engine.device, &alloc_info, NULL, &g_engine.vertex_buffer_memory);
+  if (result != VK_SUCCESS)
+  {
+    moss__error ("Failed to allocate memory for vertex buffer: %d.", result);
+    return MOSS_RESULT_ERROR;
+  }
+
+  return MOSS_RESULT_SUCCESS;
+}
+
+inline static void moss__fill_vertex_buffer (void)
+{
+  void *mapped_memory;
+  vkMapMemory (
+    g_engine.device,
+    g_engine.vertex_buffer_memory,
+    0,
+    g_engine.vertex_buffer_size,
+    0,
+    &mapped_memory
+  );
+
+  memcpy (mapped_memory, g_verticies, sizeof (g_verticies));
+
+  vkUnmapMemory (g_engine.device, g_engine.vertex_buffer_memory);
+}
+
 inline static MossResult moss__create_command_buffers (void)
 {
   const VkCommandBufferAllocateInfo alloc_info = {
@@ -1375,10 +1539,15 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
     .extent = g_engine.swapchain_extent,
   };
 
+  const VkBuffer     vertex_buffers[]        = { g_engine.vertex_buffer };
+  const VkDeviceSize vertex_buffer_offsets[] = { 0 };
+
   vkCmdSetViewport (command_buffer, 0, 1, &viewport);
   vkCmdSetScissor (command_buffer, 0, 1, &scissor);
 
-  vkCmdDraw (command_buffer, 3, 1, 0, 0);
+  vkCmdBindVertexBuffers (command_buffer, 0, 1, vertex_buffers, vertex_buffer_offsets);
+
+  vkCmdDraw (command_buffer, sizeof (g_verticies) / sizeof (g_verticies[ 0 ]), 1, 0, 0);
 
   vkCmdEndRenderPass (command_buffer);
 
