@@ -160,14 +160,14 @@ static Moss__Engine g_engine = {
   .surface      = VK_NULL_HANDLE,
 
   /* Physical and logical device. */
-  .physical_device                                = VK_NULL_HANDLE,
-  .device                                         = VK_NULL_HANDLE,
-  .queue_family_indices.graphics_family           = 0,
-  .queue_family_indices.present_family            = 0,
-  .queue_family_indices.graphics_family_has_value = false,
-  .queue_family_indices.present_family_has_value  = false,
-  .graphics_queue                                 = VK_NULL_HANDLE,
-  .present_queue                                  = VK_NULL_HANDLE,
+  .physical_device                            = VK_NULL_HANDLE,
+  .device                                     = VK_NULL_HANDLE,
+  .queue_family_indices.graphics_family       = 0,
+  .queue_family_indices.present_family        = 0,
+  .queue_family_indices.graphics_family_found = false,
+  .queue_family_indices.present_family_found  = false,
+  .graphics_queue                             = VK_NULL_HANDLE,
+  .present_queue                              = VK_NULL_HANDLE,
 
   /* Swap chain. */
   .swapchain                   = VK_NULL_HANDLE,
@@ -618,14 +618,14 @@ void moss_engine_deinit (void)
     }
 
     vkDestroyDevice (g_engine.device, NULL);
-    g_engine.device                                         = VK_NULL_HANDLE;
-    g_engine.physical_device                                = VK_NULL_HANDLE;
-    g_engine.graphics_queue                                 = VK_NULL_HANDLE;
-    g_engine.present_queue                                  = VK_NULL_HANDLE;
-    g_engine.queue_family_indices.graphics_family           = 0;
-    g_engine.queue_family_indices.present_family            = 0;
-    g_engine.queue_family_indices.graphics_family_has_value = false;
-    g_engine.queue_family_indices.present_family_has_value  = false;
+    g_engine.device                                     = VK_NULL_HANDLE;
+    g_engine.physical_device                            = VK_NULL_HANDLE;
+    g_engine.graphics_queue                             = VK_NULL_HANDLE;
+    g_engine.present_queue                              = VK_NULL_HANDLE;
+    g_engine.queue_family_indices.graphics_family       = 0;
+    g_engine.queue_family_indices.present_family        = 0;
+    g_engine.queue_family_indices.graphics_family_found = false;
+    g_engine.queue_family_indices.present_family_found  = false;
   }
 
   if (g_engine.surface != VK_NULL_HANDLE)

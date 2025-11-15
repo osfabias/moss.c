@@ -38,10 +38,12 @@
 */
 typedef struct
 {
-  uint32_t graphics_family;           /* Graphics queue family index. */
-  uint32_t present_family;            /* Present queue family index. */
-  bool     graphics_family_has_value; /* Whether graphics family index is valid. */
-  bool     present_family_has_value;  /* Whether present family index is valid. */
+  uint32_t graphics_family;       /* Graphics queue family index. */
+  uint32_t present_family;        /* Present queue family index. */
+  uint32_t transfer_family;       /* Transfer queue family index. */
+  bool     graphics_family_found; /* Whether graphics family index is valid. */
+  bool     present_family_found;  /* Whether present family index is valid. */
+  bool     transfer_family_found; /* Whether present family index is valid. */
 } Moss__QueueFamilyIndices;
 
 /*
@@ -84,8 +86,9 @@ inline static Moss__QueueFamilyIndices
 moss__find_queue_families (const VkPhysicalDevice device, const VkSurfaceKHR surface)
 {
   Moss__QueueFamilyIndices indices = {
-    .graphics_family_has_value = false,
-    .present_family_has_value  = false,
+    .graphics_family_found = false,
+    .present_family_found  = false,
+    .transfer_family_found = false,
   };
 
   uint32_t queue_family_count = 0;
@@ -96,10 +99,19 @@ moss__find_queue_families (const VkPhysicalDevice device, const VkSurfaceKHR sur
 
   for (uint32_t i = 0; i < queue_family_count; ++i)
   {
-    if (queue_families[ i ].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+    VkQueueFlags queue_family_flags = queue_families[ i ].queueFlags;
+
+    if ((queue_family_flags & VK_QUEUE_TRANSFER_BIT) &&
+        !(queue_family_flags & VK_QUEUE_GRAPHICS_BIT))
     {
-      indices.graphics_family           = i;
-      indices.graphics_family_has_value = true;
+      indices.transfer_family       = i;
+      indices.transfer_family_found = true;
+    }
+
+    if (queue_family_flags & VK_QUEUE_GRAPHICS_BIT)
+    {
+      indices.graphics_family       = i;
+      indices.graphics_family_found = true;
     }
 
     VkBool32 present_support = false;
@@ -107,11 +119,22 @@ moss__find_queue_families (const VkPhysicalDevice device, const VkSurfaceKHR sur
 
     if (present_support)
     {
-      indices.present_family           = i;
-      indices.present_family_has_value = true;
+      indices.present_family       = i;
+      indices.present_family_found = true;
     }
 
-    if (indices.graphics_family_has_value && indices.present_family_has_value) { break; }
+    if (indices.transfer_family_found && indices.graphics_family_found &&
+        indices.present_family_found)
+    {
+      break;
+    }
+  }
+
+  // If transfer queue family not found, set it to be the same as the graphics family
+  if (!indices.transfer_family_found)
+  {
+    indices.transfer_family       = indices.graphics_family;
+    indices.transfer_family_found = true;
   }
 
   return indices;
@@ -135,7 +158,7 @@ inline static bool moss__check_device_queues_support (
 
   const Moss__QueueFamilyIndices indices = moss__find_queue_families (device, surface);
 
-  if (!indices.present_family_has_value)
+  if (!indices.present_family_found)
   {
     moss__info (
       "%s device do not support required present queue family.\n",
@@ -144,7 +167,7 @@ inline static bool moss__check_device_queues_support (
     return false;
   }
 
-  if (!indices.graphics_family_has_value)
+  if (!indices.graphics_family_found)
   {
     moss__info (
       "%s device do not support required graphics queue family.\n",
