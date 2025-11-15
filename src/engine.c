@@ -324,6 +324,11 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
 inline static void moss__cleanup_swapchain (void);
 
 /*
+  @brief Waits until window gets maximized.
+*/
+inline static void moss__wait_while_window_is_minimized (void);
+
+/*
   @brief Recreates swap chain.
   @param width Window width.
   @param height Window height.
@@ -1316,8 +1321,6 @@ moss__record_command_buffer (VkCommandBuffer command_buffer, uint32_t image_inde
 
 inline static void moss__cleanup_swapchain (void)
 {
-  if (g_engine.device == VK_NULL_HANDLE) { return; }
-
   if (g_engine.swapchain_framebuffers != NULL)
   {
     for (uint32_t i = 0; i < g_engine.swapchain_image_count; ++i)
