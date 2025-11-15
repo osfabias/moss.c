@@ -29,10 +29,11 @@
 #include "src/internal/crate.h"
 #include "src/internal/log.h"
 #include "src/internal/memory_utils.h"
+#include "src/internal/vk_buffer_utils.h"
 
 MossResult moss__create_crate (
-  const VkPhysicalDevice           physical_device,
-  const VkDevice                   device,
+  const VkPhysicalDevice             physical_device,
+  const VkDevice                     device,
   const Moss__CrateCreateInfo *const info,
   Moss__Crate *const                 out_crate
 )
@@ -74,7 +75,7 @@ MossResult moss__create_crate (
       );
       if (result != MOSS_RESULT_SUCCESS)
       {
-        vkDestroyBuffer (device, out_crate->buffer, NULL);
+        moss__destroy_crate (out_crate);
         moss__error ("Failed to find suitable memory type for buffer.");
         return MOSS_RESULT_ERROR;
       }
@@ -90,7 +91,7 @@ MossResult moss__create_crate (
       vkAllocateMemory (device, &alloc_info, NULL, &out_crate->memory);
     if (result != VK_SUCCESS)
     {
-      vkDestroyBuffer (device, out_crate->buffer, NULL);
+      moss__destroy_crate (out_crate);
       moss__error ("Failed to allocate buffer memory: %d.", result);
       return MOSS_RESULT_ERROR;
     }
@@ -100,36 +101,88 @@ MossResult moss__create_crate (
   vkBindBufferMemory (device, out_crate->buffer, out_crate->memory, 0);
 
   // Save device handles for later cleanup
-  out_crate->original_device         = device;
+  out_crate->original_device          = device;
   out_crate->original_physical_device = physical_device;
+
+  // Save sharing mode and queue family indices
+  out_crate->sharing_mode                    = info->sharing_mode;
+  out_crate->shared_queue_family_index_count = info->shared_queue_family_index_count;
+  if (info->shared_queue_family_index_count > 0 &&
+      info->shared_queue_family_indices != NULL)
+  {
+    for (uint32_t i = 0; i < info->shared_queue_family_index_count && i < 2; ++i)
+    {
+      out_crate->shared_queue_family_indices[ i ] =
+        info->shared_queue_family_indices[ i ];
+    }
+  }
 
   return MOSS_RESULT_SUCCESS;
 }
 
-MossResult moss__fill_crate (
-  Moss__Crate *destination_crate,
-  void        *source,
-  VkDeviceSize size
-)
+MossResult moss__fill_crate (const Moss__FillCrateInfo *const info)
 {
+  Moss__Crate *const dst_crate = info->destination_crate;
+
+  // Create staing crate
+  Moss__Crate staging_crate;
+  {
+    const Moss__CrateCreateInfo create_info = {
+      .size  = dst_crate->size,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      .memory_properties =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+
+      .sharing_mode                    = dst_crate->sharing_mode,
+      .shared_queue_family_index_count = dst_crate->shared_queue_family_index_count,
+      .shared_queue_family_indices     = dst_crate->shared_queue_family_indices,
+    };
+    moss__create_crate (
+      dst_crate->original_physical_device,
+      dst_crate->original_device,
+      &create_info,
+      &staging_crate
+    );
+  }
+
+  // Copy data to the staging buffer
   void *mapped_memory;
   vkMapMemory (
-    destination_crate->original_device,
-    destination_crate->memory,
+    staging_crate.original_device,
+    staging_crate.memory,
     0,
-    destination_crate->size,
+    staging_crate.size,
     0,
     &mapped_memory
   );
 
-  memcpy (mapped_memory, source, size);
+  memcpy (mapped_memory, info->source_memory, info->size);
 
-  vkUnmapMemory (destination_crate->original_device, destination_crate->memory);
+  vkUnmapMemory (staging_crate.original_device, staging_crate.memory);
+
+  {  // Copy data from staging buffer to the destination buffer
+    const Moss__CopyVkBufferInfo copy_info = {
+      .transfer_queue     = info->transfer_queue,
+      .command_pool       = info->command_pool,
+      .device             = dst_crate->original_device,
+      .destination_buffer = dst_crate->buffer,
+      .source_buffer      = staging_crate.buffer,
+      .size               = staging_crate.size,
+    };
+    const MossResult result = moss__copy_vk_buffer (&copy_info);
+    if (result != MOSS_RESULT_SUCCESS)
+    {
+      moss__error ("Failed to copy vulkan buffer.\n");
+      return MOSS_RESULT_ERROR;
+    }
+  }
+
+  moss__destroy_crate (&staging_crate);
 
   return MOSS_RESULT_SUCCESS;
 }
 
-void moss__free_crate (Moss__Crate *crate)
+void moss__destroy_crate (Moss__Crate *crate)
 {
   if (crate == NULL) { return; }
 
@@ -145,7 +198,11 @@ void moss__free_crate (Moss__Crate *crate)
     crate->buffer = VK_NULL_HANDLE;
   }
 
-  crate->size                    = 0;
-  crate->original_device         = VK_NULL_HANDLE;
-  crate->original_physical_device = VK_NULL_HANDLE;
+  crate->size                             = 0;
+  crate->original_device                  = VK_NULL_HANDLE;
+  crate->original_physical_device         = VK_NULL_HANDLE;
+  crate->sharing_mode                     = VK_SHARING_MODE_EXCLUSIVE;
+  crate->shared_queue_family_index_count  = 0;
+  crate->shared_queue_family_indices[ 0 ] = 0;
+  crate->shared_queue_family_indices[ 1 ] = 0;
 }

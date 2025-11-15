@@ -25,6 +25,7 @@
 #include <vulkan/vulkan.h>
 
 #include "moss/result.h"
+#include "vulkan/vulkan_core.h"
 
 /*
   @brief Crate - a self-contained GPU buffer abstraction.
@@ -97,6 +98,29 @@ typedef struct
      @note This size should be used when mapping memory or performing operations
            that require the actual allocated size rather than the requested size. */
   VkDeviceSize size;
+
+  /* Buffer sharing mode between queue families.
+     @details The sharing mode that was used when creating this buffer. This is
+              either VK_SHARING_MODE_EXCLUSIVE or VK_SHARING_MODE_CONCURRENT.
+     @note This field is set automatically by @ref moss__create_crate and should
+           not be modified manually. */
+  VkSharingMode sharing_mode;
+
+  /* Number of queue family indices that share this buffer.
+     @details The number of queue families in the @c shared_queue_family_indices
+              array. This is 0 for exclusive mode, or 2 for concurrent mode when
+              sharing between graphics and transfer queues.
+     @note This field is set automatically by @ref moss__create_crate and should
+           not be modified manually. */
+  uint32_t shared_queue_family_index_count;
+
+  /* Queue family indices that share this buffer.
+     @details An array of queue family indices that can access this buffer when
+              using concurrent sharing mode. Only valid when @c sharing_mode is
+              VK_SHARING_MODE_CONCURRENT and @c shared_queue_family_index_count > 0.
+     @note This field is set automatically by @ref moss__create_crate and should
+           not be modified manually. */
+  uint32_t shared_queue_family_indices[ 2 ];
 } Moss__Crate;
 
 /*
@@ -112,57 +136,45 @@ typedef struct
 */
 typedef struct
 {
-  /* Desired size of the buffer in bytes.
-     @details This is the minimum size requested for the buffer. The actual
-              allocated size may be larger due to memory alignment requirements
-              and device-specific constraints. The actual size can be queried
-              from the created crate's @c size field.
-     @note Must be greater than 0. */
+  /* Desired size of the buffer in bytes. */
   VkDeviceSize size;
 
-  /* Buffer usage flags specifying how the buffer will be used.
-     @details A bitmask of VkBufferUsageFlagBits values indicating the intended
-              use of the buffer. Common flags include:
-              - VK_BUFFER_USAGE_VERTEX_BUFFER_BIT for vertex data
-              - VK_BUFFER_USAGE_INDEX_BUFFER_BIT for index data
-              - VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT for uniform data
-              - VK_BUFFER_USAGE_TRANSFER_SRC_BIT / TRANSFER_DST_BIT for transfers
-     @note Multiple flags can be combined using bitwise OR. */
+  /* Buffer usage flags specifying how the buffer will be used. */
   VkBufferUsageFlags usage;
 
-  /* Buffer sharing mode between queue families.
-     @details Specifies how the buffer will be shared between different queue
-              families:
-              - VK_SHARING_MODE_EXCLUSIVE: Buffer is owned by one queue family
-              - VK_SHARING_MODE_CONCURRENT: Buffer can be used by multiple families
-     @note If EXCLUSIVE, @c shared_queue_family_index_count must be 0.
-           If CONCURRENT, @c shared_queue_family_indices must be valid. */
+  /* Buffer sharing mode between queue families. */
   VkSharingMode sharing_mode;
 
-  /* Number of queue family indices that will share the buffer.
-     @details Only used when @c sharing_mode is VK_SHARING_MODE_CONCURRENT.
-              Specifies the number of queue families in the @c shared_queue_family_indices
-              array. Must be 0 if @c sharing_mode is VK_SHARING_MODE_EXCLUSIVE.
-     @note Must be 0 for exclusive mode, or >= 2 for concurrent mode. */
+  /* Number of queue family indices that will share the buffer. */
   uint32_t shared_queue_family_index_count;
 
-  /* Array of queue family indices that will share the buffer.
-     @details Only used when @c sharing_mode is VK_SHARING_MODE_CONCURRENT.
-              Points to an array of @c shared_queue_family_index_count queue family
-              indices. Can be NULL if @c shared_queue_family_index_count is 0.
-     @note Must be NULL or point to a valid array when using concurrent mode. */
+  /* Array of queue family indices that will share the buffer. */
   const uint32_t *shared_queue_family_indices;
 
-  /* Required memory properties for the buffer's backing memory.
-     @details A bitmask of VkMemoryPropertyFlagBits specifying the required
-              memory properties. Common combinations:
-              - VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | HOST_COHERENT_BIT: CPU-accessible
-              - VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT: GPU-only, fast access
-              - DEVICE_LOCAL_BIT | HOST_VISIBLE_BIT: Optimized for frequent CPU updates
-     @note The memory type selection will find the first memory type that satisfies
-           all specified properties. */
+  /* Required memory properties for the buffer's backing memory. */
   VkMemoryPropertyFlags memory_properties;
 } Moss__CrateCreateInfo;
+
+/*
+  @brief Required information for crate filling operation.
+*/
+typedef struct
+{
+  /* Destination crate to write data to. */
+  Moss__Crate *destination_crate;
+
+  /* Source memory to read data from. */
+  void *source_memory;
+
+  /* Number of bytes to read and write. */
+  VkDeviceSize size;
+
+  /* Queue to perform transfer operation on. */
+  VkQueue transfer_queue;
+
+  /* Command pool to perform commands in. */
+  VkCommandPool command_pool;
+} Moss__FillCrateInfo;
 
 /*
   @brief Creates moss crate.
@@ -183,13 +195,10 @@ MossResult moss__create_crate (
   @brief Fill moss crate.
   @details Creates temporary staging crate in order to store actual data on GPU
            in the most optimized format.
-  @param destination_crate Crate to write to.
-  @param source Source memory block to read from.
-  @param size Number of bytes to read from source and write to destination crate.
+  @param info Required information for crate fill operation.
   @return MOSS_RESULT_SUCCESS on success, otherwise MOSS_RESULT_ERROR.
 */
-MossResult
-moss__fill_crate (Moss__Crate *destination_crate, void *source, VkDeviceSize size);
+MossResult moss__fill_crate (const Moss__FillCrateInfo *info);
 
 /*
   @brief Free moss crate.
@@ -198,4 +207,4 @@ moss__fill_crate (Moss__Crate *destination_crate, void *source, VkDeviceSize siz
   @param crate Crate to free. Must not be NULL.
   @note This function safely handles NULL handles in the crate structure.
 */
-void moss__free_crate (Moss__Crate *crate);
+void moss__destroy_crate (Moss__Crate *crate);

@@ -48,7 +48,6 @@
 #include "src/internal/vk_shader_utils.h"
 #include "src/internal/vk_swapchain_utils.h"
 #include "src/internal/vk_validation_layers_utils.h"
-#include "vulkan/vulkan_core.h"
 
 /*=============================================================================
     TEMPO
@@ -332,6 +331,12 @@ inline static MossResult moss__create_framebuffers (void);
 inline static MossResult moss__create_vertex_crate (void);
 
 /*
+  @brief Fills vertex crate with vertex data.
+  @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
+*/
+inline static MossResult moss__fill_vertex_crate (void);
+
+/*
   @brief Creates command buffers.
   @return Returns MOSS_RESULT_SUCCESS on success, MOSS_RESULT_ERROR otherwise.
 */
@@ -568,11 +573,11 @@ MossResult moss_engine_init (const MossEngineConfig *const config)
     return MOSS_RESULT_ERROR;
   }
 
-  moss__fill_crate (
-    &g_engine.vertex_crate,
-    (void *)g_verticies,
-    sizeof (g_verticies)
-  );
+  if (moss__fill_vertex_crate ( ) != MOSS_RESULT_SUCCESS)
+  {
+    moss_engine_deinit ( );
+    return MOSS_RESULT_ERROR;
+  }
 
   if (moss__create_general_command_buffers ( ) != MOSS_RESULT_SUCCESS)
   {
@@ -616,7 +621,7 @@ void moss_engine_deinit (void)
       g_engine.general_command_pool = VK_NULL_HANDLE;
     }
 
-    moss__free_crate (&g_engine.vertex_crate);
+    moss__destroy_crate (&g_engine.vertex_crate);
 
     if (g_engine.graphics_pipeline != VK_NULL_HANDLE)
     {
@@ -1003,14 +1008,16 @@ inline static void moss__init_buffer_sharing_mode (void)
   if (g_engine.queue_family_indices.graphics_family ==
       g_engine.queue_family_indices.transfer_family)
   {
-    g_engine.buffer_sharing_mode            = VK_SHARING_MODE_EXCLUSIVE;
+    g_engine.buffer_sharing_mode             = VK_SHARING_MODE_EXCLUSIVE;
     g_engine.shared_queue_family_index_count = 0;
   }
   else {
     g_engine.buffer_sharing_mode = VK_SHARING_MODE_CONCURRENT;
-    g_engine.shared_queue_family_indices[ 0 ] = g_engine.queue_family_indices.graphics_family;
-    g_engine.shared_queue_family_indices[ 1 ] = g_engine.queue_family_indices.transfer_family;
-    g_engine.shared_queue_family_index_count  = 2;
+    g_engine.shared_queue_family_indices[ 0 ] =
+      g_engine.queue_family_indices.graphics_family;
+    g_engine.shared_queue_family_indices[ 1 ] =
+      g_engine.queue_family_indices.transfer_family;
+    g_engine.shared_queue_family_index_count = 2;
   }
 }
 
@@ -1424,9 +1431,8 @@ inline static MossResult moss__create_vertex_crate (void)
 {
   Moss__CrateCreateInfo create_info = {
     .size  = sizeof (g_verticies),
-    .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-    .memory_properties =
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    .memory_properties               = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     .sharing_mode                    = g_engine.buffer_sharing_mode,
     .shared_queue_family_index_count = g_engine.shared_queue_family_index_count,
     .shared_queue_family_indices     = g_engine.shared_queue_family_indices,
@@ -1439,12 +1445,22 @@ inline static MossResult moss__create_vertex_crate (void)
     &g_engine.vertex_crate
   );
 
-  if (result != MOSS_RESULT_SUCCESS)
-  {
-    moss__error ("Failed to create vertex crate.\n");
-  }
+  if (result != MOSS_RESULT_SUCCESS) { moss__error ("Failed to create vertex crate.\n"); }
 
   return result;
+}
+
+inline static MossResult moss__fill_vertex_crate (void)
+{
+  const Moss__FillCrateInfo fill_info = {
+    .destination_crate = &g_engine.vertex_crate,
+    .source_memory     = (void *)g_verticies,
+    .size              = sizeof (g_verticies),
+    .transfer_queue    = g_engine.transfer_queue,
+    .command_pool      = g_engine.transfer_command_pool,
+  };
+
+  return moss__fill_crate (&fill_info);
 }
 
 inline static MossResult moss__create_general_command_buffers (void)
@@ -1584,13 +1600,11 @@ inline static void moss__wait_while_window_is_minimized (void)
 {
   StuffyWindowRect rect = stuffy_window_get_rect (g_engine.window);
 
-  moss__info ("Waiting while window is minized...\n");
   while (rect.width == 0 || rect.height == 0)
   {
     rect = stuffy_window_get_rect (g_engine.window);
     stuffy_app_update ( );
   }
-  moss__info ("Window just maximized, stop waiting.\n");
 }
 
 inline static MossResult moss__recreate_swapchain (uint32_t width, uint32_t height)
